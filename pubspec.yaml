@@ -1,0 +1,51 @@
+name: wise_pmc_app
+description: "Wise PMC App"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.2.1
+  shared_preferences: ^2.2.3
+  file_picker: ^8.1.2
+  mime: ^1.0.0
+  http_parser: ^4.0.0  # usually already included via http
+  url_launcher: ^6.3.0
+  webview_flutter: ^4.7.0
+  webview_flutter_android: ^3.16.0  # ← add this explicitly
+  flutter_inappwebview: ^6.0.0
+  dio: ^5.4.0
+  path_provider: ^2.1.2
+  file_saver: ^0.2.14
+  open_filex: ^4.3.4
+  permission_handler: ^11.3.0
+  share_plus: ^10.0.2
+  pdf: ^3.11.0
+  intl: ^0.19.0
+  printing: ^5.13.4
+  firebase_core: ^2.0.0
+  firebase_messaging: ^14.0.0
+  flutter_local_notifications: ^17.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.13.1
+
+# 🔥 THIS MUST BE AT ROOT LEVEL (IMPORTANT)
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/logo.png"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/logo.png

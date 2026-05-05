@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "103127030828",
+    "project_id": "wise-pmc",
+    "storage_bucket": "wise-pmc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:103127030828:android:6f7ced6617a438e7c78589",
+        "android_client_info": {
+          "package_name": "com.example.wise_pmc_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA7FZzRZ-nU49hg2dKM8j5Y44GnLkD7oSA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
