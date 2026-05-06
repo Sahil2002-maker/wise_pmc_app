@@ -610,4 +610,22 @@ static String approvalFormDownload(int projectId, int id) =>
  
   static String get stageReportData =>
       '$baseUrl$_mobile/stage-report/data';
+
+      // ── Development Process (mobile API) ─────────────────────────────────────────
+ 
+// GET /api/mobile/projects/{projectId}/development-processes
+static String developmentProcesses(int projectId) =>
+    '$baseUrl$_mobile/projects/$projectId/development-processes';
+ 
+// POST /api/mobile/projects/{projectId}/development-processes/stage{N}/assign
+static String devProcessAssign(int projectId, int stageNumber) =>
+    '$baseUrl$_mobile/projects/$projectId/development-processes/stage$stageNumber/assign';
+ 
+// POST /api/mobile/projects/{projectId}/development-processes/stage{N}/upload
+static String devProcessUpload(int projectId, int stageNumber) =>
+    '$baseUrl$_mobile/projects/$projectId/development-processes/stage$stageNumber/upload';
+ 
+// GET /api/mobile/development-process/file-url?file_path=...
+static String get devProcessFileUrl =>
+    '$baseUrl$_mobile/development-process/file-url';
 }
