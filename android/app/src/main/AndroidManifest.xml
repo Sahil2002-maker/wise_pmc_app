@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.wise_pmc_app">
+    package="com.wisepmc.app">
 
     <!-- ✅ Permissions -->
     <uses-permission android:name="android.permission.INTERNET"/>

@@ -22,6 +22,7 @@ dependencies:
   flutter_inappwebview: ^6.0.0
   dio: ^5.4.0
   path_provider: ^2.1.2
+  syncfusion_flutter_pdfviewer: ^27.1.48 
   file_saver: ^0.2.14
   open_filex: ^4.3.4
   permission_handler: ^11.3.0

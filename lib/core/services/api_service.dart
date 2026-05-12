@@ -40,6 +40,8 @@ import '../../features/employee_report/data/models/employee_report_models.dart';
 import '../../features/project_report/data/models/project_report_models.dart';
 import '../../features/team_report/data/models/team_report_models.dart';
 import '../../features/development_process/data/models/development_process_model.dart';
+import '../../features/process/data/models/process_model.dart';
+import '../../features/development_process/data/models/dev_process_model.dart';
 import '../constants/api_constants.dart';
 import '../utils/api_exception.dart';
 import 'auth_storage_service.dart';
@@ -941,8 +943,13 @@ static Future<void> assignProjectToTeamMember({
     String? treasurerEmail,
     String? treasurerNo,
   }) async {
+    // FIX: Use POST with _method:PUT spoofing instead of http.put()
+    // LiteSpeed WAF blocks raw PUT requests, returning 403 Forbidden.
+    // This is the same fix applied to updateGeneralTask, updateCementChecklist,
+    // updateShutteringChecklist, updateSiteInstruction, etc. throughout this file.
     final url = Uri.parse('${ApiConstants.projects}/$projectId');
     final body = {
+      '_method': 'PUT',                          // ← Laravel method spoofing
       'project_type': projectType,
       'society_name': societyName.trim(),
       'address': address.trim(),
@@ -959,8 +966,9 @@ static Future<void> assignProjectToTeamMember({
       'treasurer_no': (treasurerNo ?? '').trim(),
     };
     try {
+      // POST instead of PUT — avoids LiteSpeed 403
       final response = await http
-          .put(url, headers: await _authHeaders(), body: jsonEncode(body))
+          .post(url, headers: await _authHeaders(), body: jsonEncode(body))
           .timeout(ApiConstants.requestTimeout);
       final decoded = _decode(response.body);
       if (response.statusCode >= 200 && response.statusCode < 300) {
@@ -8038,6 +8046,769 @@ static Future<ProjectReportData> generateProjectReport({
     } catch (e) {
       if (e is ApiException) rethrow;
       throw ApiException('Get file URL error: $e');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+// RE-DEVELOPMENT PROCESS (PROCESS MANAGEMENT)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static Future<Map<String, String>> _processHeaders() async {
+  final token = await AuthStorageService.getToken();
+  return {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
+    if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+  };
+}
+
+/// Fetch all processes for a given stage from the mobile API.
+/// GET /api/mobile/processes?stage={stage}
+static Future<List<ProcessModel>> fetchProcesses({String? stage}) async {
+  // FIX: was `const` — string interpolation makes this non-constant
+  final buffer = StringBuffer('${ApiConstants.baseUrl}/api/mobile/processes');
+  if (stage != null && stage.isNotEmpty) {
+    buffer.write('?stage=$stage');
+  }
+  final url = buffer.toString();
+
+  developer.log('[ProcessApi] fetchProcesses → GET $url', name: 'ProcessApi');
+
+  try {
+    final response = await http
+        .get(Uri.parse(url), headers: await _processHeaders())
+        .timeout(ApiConstants.requestTimeout);
+
+    final body = _decode(response.body);
+
+    developer.log(
+      '[ProcessApi] fetchProcesses ← ${response.statusCode}',
+      name: 'ProcessApi',
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      List<dynamic> raw = [];
+      if (body is Map) {
+        raw = (body['data'] as List?) ??
+            (body['processes'] as List?) ??
+            (body['items'] as List?) ??
+            [];
+      } else if (body is List) {
+        raw = body;
+      }
+      return raw
+          .whereType<Map<String, dynamic>>()
+          .map(ProcessModel.fromJson)
+          .toList();
+    }
+
+    if (response.statusCode == 401) {
+      throw ApiException('Session expired. Please login again.');
+    }
+
+    throw ApiException(
+      (body is Map ? body['message']?.toString() : null) ??
+          'Failed to load processes (${response.statusCode})',
+    );
+  } on TimeoutException {
+    throw ApiException('Request timed out. Please try again.');
+  } catch (e) {
+    if (e is ApiException) rethrow;
+    throw ApiException('Fetch processes error: $e');
+  }
+}
+
+/// Fetch teams for process assignment dropdowns.
+/// GET /api/mobile/processes/teams
+static Future<List<ProcessTeamModel>> fetchProcessTeams() async {
+  // FIX: was `const` — string interpolation makes this non-constant
+  final url = '${ApiConstants.baseUrl}/api/mobile/processes/teams';
+  developer.log('[ProcessApi] fetchProcessTeams → GET $url', name: 'ProcessApi');
+
+  try {
+    final response = await http
+        .get(Uri.parse(url), headers: await _processHeaders())
+        .timeout(ApiConstants.requestTimeout);
+
+    final body = _decode(response.body);
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      List<dynamic> raw = [];
+      if (body is Map) {
+        raw = (body['teams'] as List?) ?? (body['data'] as List?) ?? [];
+      } else if (body is List) {
+        raw = body;
+      }
+      return raw
+          .whereType<Map<String, dynamic>>()
+          .map(ProcessTeamModel.fromJson)
+          .toList();
+    }
+
+    if (response.statusCode == 401) {
+      throw ApiException('Session expired. Please login again.');
+    }
+
+    throw ApiException(
+      (body is Map ? body['message']?.toString() : null) ??
+          'Failed to load teams (${response.statusCode})',
+    );
+  } on TimeoutException {
+    throw ApiException('Request timed out. Please try again.');
+  } catch (e) {
+    if (e is ApiException) rethrow;
+    throw ApiException('Fetch process teams error: $e');
+  }
+}
+
+/// Create a new process.
+/// POST /api/mobile/processes
+static Future<Map<String, dynamic>> createProcess({
+  required String processName,
+  required int workingTeam,
+  required String stage,
+  int? day,
+}) async {
+  // FIX: was `const` — string interpolation makes this non-constant
+  final url = '${ApiConstants.baseUrl}/api/mobile/processes';
+  developer.log('[ProcessApi] createProcess → POST $url', name: 'ProcessApi');
+
+  try {
+    final response = await http
+        .post(
+          Uri.parse(url),
+          headers: await _processHeaders(),
+          body: jsonEncode({
+            'process_name': processName,
+            'working_team': workingTeam,
+            'stage': stage,
+            if (day != null) 'day': day,
+          }),
+        )
+        .timeout(ApiConstants.requestTimeout);
+
+    final body = _decode(response.body);
+
+    developer.log(
+      '[ProcessApi] createProcess ← ${response.statusCode}: ${response.body}',
+      name: 'ProcessApi',
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return body is Map<String, dynamic> ? body : {'success': true};
+    }
+
+    if (response.statusCode == 401) {
+      throw ApiException('Session expired. Please login again.');
+    }
+
+    if (response.statusCode == 422 && body is Map && body['errors'] is Map) {
+      final errors = Map<String, dynamic>.from(body['errors'] as Map);
+      final firstKey = errors.keys.isNotEmpty ? errors.keys.first : null;
+      if (firstKey != null &&
+          errors[firstKey] is List &&
+          (errors[firstKey] as List).isNotEmpty) {
+        throw ApiException((errors[firstKey] as List).first.toString());
+      }
+    }
+
+    throw ApiException(
+      (body is Map ? body['message']?.toString() : null) ??
+          'Failed to create process (${response.statusCode})',
+    );
+  } on TimeoutException {
+    throw ApiException('Request timed out. Please try again.');
+  } catch (e) {
+    if (e is ApiException) rethrow;
+    throw ApiException('Create process error: $e');
+  }
+}
+
+/// Fetch a single process for editing.
+/// GET /api/mobile/processes/{orderNo}
+static Future<ProcessModel> fetchProcessForEdit(int orderNo) async {
+  // FIX: was `const` — string interpolation makes this non-constant
+  final url = '${ApiConstants.baseUrl}/api/mobile/processes/$orderNo';
+  developer.log('[ProcessApi] fetchProcessForEdit → GET $url', name: 'ProcessApi');
+
+  try {
+    final response = await http
+        .get(Uri.parse(url), headers: await _processHeaders())
+        .timeout(ApiConstants.requestTimeout);
+
+    final body = _decode(response.body);
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      final raw = (body is Map ? (body['data'] ?? body['process'] ?? body) : body);
+      if (raw is Map<String, dynamic>) {
+        return ProcessModel.fromJson(raw);
+      }
+      throw ApiException('Unexpected response format.');
+    }
+
+    if (response.statusCode == 401) {
+      throw ApiException('Session expired. Please login again.');
+    }
+
+    throw ApiException(
+      (body is Map ? body['message']?.toString() : null) ??
+          'Process not found (${response.statusCode})',
+    );
+  } on TimeoutException {
+    throw ApiException('Request timed out. Please try again.');
+  } catch (e) {
+    if (e is ApiException) rethrow;
+    throw ApiException('Fetch process error: $e');
+  }
+}
+
+/// Update a process.
+/// POST /api/mobile/processes/{orderNo}/update
+static Future<Map<String, dynamic>> updateProcess({
+  required int orderNo,
+  required String processName,
+  required int workingTeam,
+  required String stage,
+  int? day,
+}) async {
+  // FIX: was `const` — string interpolation makes this non-constant
+  final url = '${ApiConstants.baseUrl}/api/mobile/processes/$orderNo/update';
+  developer.log('[ProcessApi] updateProcess → POST $url', name: 'ProcessApi');
+
+  try {
+    final response = await http
+        .post(
+          Uri.parse(url),
+          headers: await _processHeaders(),
+          body: jsonEncode({
+            'process_name': processName,
+            'working_team': workingTeam,
+            'stage': stage,
+            if (day != null) 'day': day,
+          }),
+        )
+        .timeout(ApiConstants.requestTimeout);
+
+    final body = _decode(response.body);
+
+    developer.log(
+      '[ProcessApi] updateProcess ← ${response.statusCode}: ${response.body}',
+      name: 'ProcessApi',
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return body is Map<String, dynamic> ? body : {'success': true};
+    }
+
+    if (response.statusCode == 401) {
+      throw ApiException('Session expired. Please login again.');
+    }
+
+    if (response.statusCode == 422 && body is Map && body['errors'] is Map) {
+      final errors = Map<String, dynamic>.from(body['errors'] as Map);
+      final firstKey = errors.keys.isNotEmpty ? errors.keys.first : null;
+      if (firstKey != null &&
+          errors[firstKey] is List &&
+          (errors[firstKey] as List).isNotEmpty) {
+        throw ApiException((errors[firstKey] as List).first.toString());
+      }
+    }
+
+    throw ApiException(
+      (body is Map ? body['message']?.toString() : null) ??
+          'Failed to update process (${response.statusCode})',
+    );
+  } on TimeoutException {
+    throw ApiException('Request timed out. Please try again.');
+  } catch (e) {
+    if (e is ApiException) rethrow;
+    throw ApiException('Update process error: $e');
+  }
+}
+
+/// Delete a process.
+/// POST /api/mobile/processes/{orderNo}/delete
+static Future<Map<String, dynamic>> deleteProcess(int orderNo) async {
+  // FIX: was `const` — string interpolation makes this non-constant
+  final url = '${ApiConstants.baseUrl}/api/mobile/processes/$orderNo/delete';
+  developer.log('[ProcessApi] deleteProcess → POST $url', name: 'ProcessApi');
+
+  try {
+    final response = await http
+        .post(
+          Uri.parse(url),
+          headers: await _processHeaders(),
+          body: jsonEncode({}),
+        )
+        .timeout(ApiConstants.requestTimeout);
+
+    final body = _decode(response.body);
+
+    developer.log(
+      '[ProcessApi] deleteProcess ← ${response.statusCode}',
+      name: 'ProcessApi',
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return body is Map<String, dynamic> ? body : {'success': true};
+    }
+
+    if (response.statusCode == 401) {
+      throw ApiException('Session expired. Please login again.');
+    }
+
+    throw ApiException(
+      (body is Map ? body['message']?.toString() : null) ??
+          'Failed to delete process (${response.statusCode})',
+    );
+  } on TimeoutException {
+    throw ApiException('Request timed out. Please try again.');
+  } catch (e) {
+    if (e is ApiException) rethrow;
+    throw ApiException('Delete process error: $e');
+  }
+}
+
+/// Update the review team for a process.
+/// POST /api/mobile/processes/{orderNo}/update-team
+static Future<Map<String, dynamic>> updateProcessTeam({
+  required int orderNo,
+  required int teamId,
+}) async {
+  // FIX: was `const` — string interpolation makes this non-constant
+  final url = '${ApiConstants.baseUrl}/api/mobile/processes/$orderNo/update-team';
+  developer.log('[ProcessApi] updateProcessTeam → POST $url', name: 'ProcessApi');
+
+  try {
+    final response = await http
+        .post(
+          Uri.parse(url),
+          headers: await _processHeaders(),
+          body: jsonEncode({'team_id': teamId}),
+        )
+        .timeout(ApiConstants.requestTimeout);
+
+    final body = _decode(response.body);
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return body is Map<String, dynamic> ? body : {'success': true};
+    }
+
+    if (response.statusCode == 401) {
+      throw ApiException('Session expired. Please login again.');
+    }
+
+    throw ApiException(
+      (body is Map ? body['message']?.toString() : null) ??
+          'Failed to update team (${response.statusCode})',
+    );
+  } on TimeoutException {
+    throw ApiException('Request timed out. Please try again.');
+  } catch (e) {
+    if (e is ApiException) rethrow;
+    throw ApiException('Update process team error: $e');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+  // DEVELOPMENT PROCESS — correct http-package implementation
+  // ════════════════════════════════════════════════════════════════════════════
+ 
+  /// Fetch all processes for a given stage (0–3).
+  /// GET /api/mobile/development-process/processes?stage={stage}
+  static Future<List<DevProcessModel>> fetchDevProcesses({int stage = 0}) async {
+    final uri = Uri.parse(ApiConstants.devProcessList)
+        .replace(queryParameters: {'stage': '$stage'});
+ 
+    developer.log('[DevProcess] fetchDevProcesses → GET $uri',
+        name: 'ApiService');
+ 
+    try {
+      final response = await http
+          .get(uri, headers: await _authHeaders())
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final list = (body is Map ? body['processes'] : null) as List<dynamic>? ?? [];
+        return list
+            .whereType<Map<String, dynamic>>()
+            .map(DevProcessModel.fromJson)
+            .toList();
+      }
+      if (response.statusCode == 401) {
+        throw ApiException('Session expired. Please login again.');
+      }
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Failed to load processes (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out. Please try again.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('fetchDevProcesses error: $e');
+    }
+  }
+ 
+  /// Fetch all stages with process counts (for tab badges).
+  /// GET /api/mobile/development-process/all-stages
+  static Future<List<DevProcessStageModel>> fetchDevProcessAllStages() async {
+    developer.log('[DevProcess] fetchDevProcessAllStages → GET',
+        name: 'ApiService');
+    try {
+      final response = await http
+          .get(Uri.parse(ApiConstants.devProcessAllStages),
+              headers: await _authHeaders())
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final stages =
+            (body is Map ? body['stages'] : null) as List<dynamic>? ?? [];
+        return stages
+            .whereType<Map<String, dynamic>>()
+            .map(DevProcessStageModel.fromJson)
+            .toList();
+      }
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Failed (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out. Please try again.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('fetchDevProcessAllStages error: $e');
+    }
+  }
+ 
+  /// Fetch all teams for the team picker.
+  /// GET /api/mobile/development-process/teams
+  static Future<List<DevProcessTeamModel>> fetchDevProcessTeams() async {
+    developer.log('[DevProcess] fetchDevProcessTeams → GET', name: 'ApiService');
+    try {
+      final response = await http
+          .get(Uri.parse(ApiConstants.devProcessTeams),
+              headers: await _authHeaders())
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final teams =
+            (body is Map ? body['teams'] : null) as List<dynamic>? ?? [];
+        return teams
+            .whereType<Map<String, dynamic>>()
+            .map(DevProcessTeamModel.fromJson)
+            .toList();
+      }
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Failed (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out. Please try again.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('fetchDevProcessTeams error: $e');
+    }
+  }
+ 
+  /// Get the next suggested order number for a stage.
+  /// GET /api/mobile/development-process/max-order?stage={stage}
+  static Future<int> fetchDevProcessNextOrder({int stage = 0}) async {
+    final uri = Uri.parse(ApiConstants.devProcessMaxOrder)
+        .replace(queryParameters: {'stage': '$stage'});
+ 
+    try {
+      final response = await http
+          .get(uri, headers: await _authHeaders())
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return (body is Map ? (body['next_order'] as num?)?.toInt() : null) ?? 1;
+      }
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      throw ApiException('Failed (${response.statusCode})');
+    } on TimeoutException {
+      throw ApiException('Request timed out.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('fetchDevProcessNextOrder error: $e');
+    }
+  }
+ 
+  /// Create a new development process.
+  /// POST /api/mobile/development-process/store
+  static Future<void> addDevProcess({
+    required String processName,
+    required int teamId,
+    required int stage,
+    required int orderNo,
+  }) async {
+    developer.log('[DevProcess] addDevProcess → POST', name: 'ApiService');
+    try {
+      final response = await http
+          .post(
+            Uri.parse(ApiConstants.devProcessStore),
+            headers: await _authHeaders(),
+            body: jsonEncode({
+              'process_name': processName,
+              'team_id':      teamId,
+              'stage':        stage,
+              'order_no':     orderNo,
+            }),
+          )
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) return;
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      if (response.statusCode == 422 && body is Map && body['errors'] is Map) {
+        final errors = Map<String, dynamic>.from(body['errors'] as Map);
+        final firstKey = errors.keys.isNotEmpty ? errors.keys.first : null;
+        if (firstKey != null &&
+            errors[firstKey] is List &&
+            (errors[firstKey] as List).isNotEmpty) {
+          throw ApiException((errors[firstKey] as List).first.toString());
+        }
+      }
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Failed (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('addDevProcess error: $e');
+    }
+  }
+ 
+  /// Fetch a single process by processId (for pre-filling edit form).
+  /// GET /api/mobile/development-process/edit/{processId}
+  static Future<Map<String, dynamic>> fetchDevProcessById(int processId) async {
+    developer.log('[DevProcess] fetchDevProcessById → GET processId=$processId',
+        name: 'ApiService');
+    try {
+      final response = await http
+          .get(Uri.parse(ApiConstants.devProcessEdit(processId)),
+              headers: await _authHeaders())
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return body is Map<String, dynamic> ? body : <String, dynamic>{};
+      }
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Process not found (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('fetchDevProcessById error: $e');
+    }
+  }
+ 
+  /// Update an existing development process.
+  /// POST /api/mobile/development-process/update
+  static Future<void> updateDevProcess({
+    required int processId,
+    required String processName,
+    required int teamId,
+    required int stage,
+    required int orderNo,
+  }) async {
+    developer.log('[DevProcess] updateDevProcess → POST processId=$processId',
+        name: 'ApiService');
+    try {
+      final response = await http
+          .post(
+            Uri.parse(ApiConstants.devProcessUpdate),
+            headers: await _authHeaders(),
+            body: jsonEncode({
+              'process_id':   processId,
+              'process_name': processName,
+              'team_id':      teamId,
+              'stage':        stage,
+              'order_no':     orderNo,
+            }),
+          )
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) return;
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      if (response.statusCode == 422 && body is Map && body['errors'] is Map) {
+        final errors = Map<String, dynamic>.from(body['errors'] as Map);
+        final firstKey = errors.keys.isNotEmpty ? errors.keys.first : null;
+        if (firstKey != null &&
+            errors[firstKey] is List &&
+            (errors[firstKey] as List).isNotEmpty) {
+          throw ApiException((errors[firstKey] as List).first.toString());
+        }
+      }
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Failed (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('updateDevProcess error: $e');
+    }
+  }
+ 
+  /// Delete a development process by processId.
+  /// DELETE /api/mobile/development-process/delete/{processId}
+  static Future<void> deleteDevProcess(int processId) async {
+    developer.log('[DevProcess] deleteDevProcess → DELETE processId=$processId',
+        name: 'ApiService');
+    try {
+      final response = await http
+          .delete(
+            Uri.parse(ApiConstants.devProcessDelete(processId)),
+            headers: await _authHeaders(),
+          )
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) return;
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Failed (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('deleteDevProcess error: $e');
+    }
+  }
+ 
+  /// Fetch processes grouped by stage for a specific project (role-aware).
+  /// GET /api/mobile/development-process/project/{projectId}
+  static Future<Map<String, dynamic>> fetchDevProjectProcesses(
+      int projectId) async {
+    developer.log(
+        '[DevProcess] fetchDevProjectProcesses → GET projectId=$projectId',
+        name: 'ApiService');
+    try {
+      final response = await http
+          .get(Uri.parse(ApiConstants.devProcessProject(projectId)),
+              headers: await _authHeaders())
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return body is Map<String, dynamic> ? body : <String, dynamic>{};
+      }
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Failed (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('fetchDevProjectProcesses error: $e');
+    }
+  }
+ 
+  /// Assign a development process to a user for a project.
+  /// POST /api/mobile/development-process/assign
+  static Future<void> assignDevProcess({
+    required int projectId,
+    required int processId,
+    required int assignedTo,
+    String? deadline,
+  }) async {
+    developer.log('[DevProcess] assignDevProcess → POST', name: 'ApiService');
+ 
+    final payload = <String, dynamic>{
+      'project_id':  projectId,
+      'process_id':  processId,
+      'assigned_to': assignedTo,
+      if (deadline != null) 'deadline': deadline,
+    };
+ 
+    try {
+      final response = await http
+          .post(
+            Uri.parse(ApiConstants.devProcessAssign),
+            headers: await _authHeaders(),
+            body: jsonEncode(payload),
+          )
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) return;
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Failed (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('assignDevProcess error: $e');
+    }
+  }
+ 
+  /// Fetch team members for a given team (for assignment picker).
+  /// GET /api/mobile/development-process/team-members/{teamId}
+  static Future<List<Map<String, dynamic>>> fetchDevProcessTeamMembers(
+      int teamId) async {
+    developer.log(
+        '[DevProcess] fetchDevProcessTeamMembers → GET teamId=$teamId',
+        name: 'ApiService');
+    try {
+      final response = await http
+          .get(Uri.parse(ApiConstants.devProcessTeamMembers(teamId)),
+              headers: await _authHeaders())
+          .timeout(ApiConstants.requestTimeout);
+ 
+      final body = _decode(response.body);
+ 
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final members =
+            (body is Map ? body['members'] : null) as List<dynamic>? ?? [];
+        return members
+            .whereType<Map>()
+            .map((m) => Map<String, dynamic>.from(m))
+            .toList();
+      }
+      if (response.statusCode == 401) throw ApiException('Session expired.');
+      throw ApiException(
+        (body is Map ? body['message']?.toString() : null) ??
+            'Failed (${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('fetchDevProcessTeamMembers error: $e');
     }
   }
 

@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/services/auth_storage_service.dart';
@@ -12,6 +11,7 @@ import '../../../../core/utils/api_exception.dart';
 import '../../data/models/development_process_model.dart';
 import '../../data/services/development_process_api.dart';
 import '../widgets/assign_process_sheet.dart';
+import 'document_viewer_page.dart'; // ← NEW import
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
@@ -64,6 +64,9 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
   // Track in-progress actions per orderNo key
   final Set<String> _assigningKeys = {};
   final Set<String> _uploadingKeys = {};
+
+  // ── NEW: track which file is currently being fetched (URL lookup) ─────────
+  final Set<String> _viewingKeys = {};
 
   @override
   void initState() {
@@ -259,30 +262,78 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
     }
   }
 
-  Future<void> _viewFile(String filePath) async {
-    try {
-      final url = await DevelopmentProcessApi.getFileUrl(filePath);
-      if (url.isEmpty) throw ApiException('File URL is empty.');
-      if (await canLaunchUrl(Uri.parse(url))) {
-        await launchUrl(Uri.parse(url),
-            mode: LaunchMode.externalApplication);
-      } else {
-        throw ApiException('Could not open file.');
-      }
-    } catch (e) {
+  // ── UPDATED _viewFile — opens in-app viewer instead of external browser ───
+
+  Future<void> _viewFile(
+    DevelopmentProcessItem process,
+    int stageNum,
+    String filePath,
+  ) async {
+    // Guard: empty path
+    if (filePath.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e is ApiException ? e.message : e.toString()),
-            backgroundColor: const Color(0xFFEF4444),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
+        _showErrorSnackBar('No file is attached to this process.');
       }
+      return;
     }
+
+    final key = '${stageNum}_${process.orderNo}';
+    if (_viewingKeys.contains(key)) return; // already fetching
+
+    setState(() => _viewingKeys.add(key));
+
+    try {
+      // Fetch the temporary/signed URL from the API
+      final url = await DevelopmentProcessApi.getFileUrl(filePath);
+
+      if (url.isEmpty) {
+        throw ApiException('The file URL returned by the server is empty.');
+      }
+
+      if (!mounted) return;
+
+      // Navigate to in-app viewer — no external browser involved
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => DocumentViewerPage(
+            url: url,
+            title: process.processName,
+          ),
+        ),
+      );
+    } on ApiException catch (e) {
+      if (mounted) _showErrorSnackBar(e.message);
+    } catch (e) {
+      if (mounted) _showErrorSnackBar('Could not open file. Please try again.');
+    } finally {
+      if (mounted) setState(() => _viewingKeys.remove(key));
+    }
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline_rounded,
+                color: Colors.white, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFFEF4444),
+        behavior: SnackBarBehavior.floating,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -501,9 +552,15 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
               stageNumber: stage.stageNumber,
               canAssign: _canAssign,
               uploadingKeys: _uploadingKeys,
+              viewingKeys: _viewingKeys, // ← pass viewing state
               onAssign: () => _openAssignSheet(process, stage.stageNumber),
               onUpload: () => _uploadFile(process, stage.stageNumber),
-              onViewFile: () => _viewFile(process.assignment?.filePath ?? ''),
+              // ← now passes process + stageNum so _viewFile can build the key
+              onViewFile: () => _viewFile(
+                process,
+                stage.stageNumber,
+                process.assignment?.filePath ?? '',
+              ),
             ),
           );
         },
@@ -595,6 +652,7 @@ class _ProcessCard extends StatelessWidget {
   final int stageNumber;
   final bool canAssign;
   final Set<String> uploadingKeys;
+  final Set<String> viewingKeys; // ← NEW
   final VoidCallback onAssign;
   final VoidCallback onUpload;
   final VoidCallback onViewFile;
@@ -605,13 +663,16 @@ class _ProcessCard extends StatelessWidget {
     required this.stageNumber,
     required this.canAssign,
     required this.uploadingKeys,
+    required this.viewingKeys,
     required this.onAssign,
     required this.onUpload,
     required this.onViewFile,
   });
 
   String get _uploadKey => '${stageNumber}_${process.orderNo}';
+  String get _viewKey => '${stageNumber}_${process.orderNo}';
   bool get _isUploading => uploadingKeys.contains(_uploadKey);
+  bool get _isViewing => viewingKeys.contains(_viewKey); // ← NEW
 
   @override
   Widget build(BuildContext context) {
@@ -781,7 +842,7 @@ class _ProcessCard extends StatelessWidget {
                           onTap: _isUploading ? null : onUpload,
                         ),
 
-                      // View file button
+                      // ── UPDATED View button — shows spinner while fetching URL ──
                       if (assign != null &&
                           !assign.isNA &&
                           assign.hasFile)
@@ -789,7 +850,8 @@ class _ProcessCard extends StatelessWidget {
                           label: 'View',
                           icon: Icons.visibility_rounded,
                           color: const Color(0xFF0EA5E9),
-                          onTap: onViewFile,
+                          loading: _isViewing, // ← spinner while URL is fetched
+                          onTap: _isViewing ? null : onViewFile,
                         ),
                     ],
                   ),

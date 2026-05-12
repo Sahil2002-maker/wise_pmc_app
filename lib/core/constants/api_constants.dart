@@ -611,21 +611,51 @@ static String approvalFormDownload(int projectId, int id) =>
   static String get stageReportData =>
       '$baseUrl$_mobile/stage-report/data';
 
-      // ── Development Process (mobile API) ─────────────────────────────────────────
+    // ── Re-Development Process (mobile API) ──────────────────────────────────────
  
-// GET /api/mobile/projects/{projectId}/development-processes
-static String developmentProcesses(int projectId) =>
-    '$baseUrl$_mobile/projects/$projectId/development-processes';
+/// GET  /api/mobile/processes?stage={stage}
+static String get processMobileList => '$baseUrl$_mobile/processes';
  
-// POST /api/mobile/projects/{projectId}/development-processes/stage{N}/assign
-static String devProcessAssign(int projectId, int stageNumber) =>
-    '$baseUrl$_mobile/projects/$projectId/development-processes/stage$stageNumber/assign';
+/// GET  /api/mobile/processes/teams
+static String get processMobileTeams => '$baseUrl$_mobile/processes/teams';
  
-// POST /api/mobile/projects/{projectId}/development-processes/stage{N}/upload
-static String devProcessUpload(int projectId, int stageNumber) =>
-    '$baseUrl$_mobile/projects/$projectId/development-processes/stage$stageNumber/upload';
+/// GET  /api/mobile/processes/{orderNo}
+static String processMobileShow(int orderNo) =>
+    '$baseUrl$_mobile/processes/$orderNo';
  
-// GET /api/mobile/development-process/file-url?file_path=...
-static String get devProcessFileUrl =>
-    '$baseUrl$_mobile/development-process/file-url';
+/// POST /api/mobile/processes
+static String get processMobileStore => '$baseUrl$_mobile/processes';
+ 
+/// POST /api/mobile/processes/{orderNo}/update
+static String processMobileUpdate(int orderNo) =>
+    '$baseUrl$_mobile/processes/$orderNo/update';
+ 
+/// POST /api/mobile/processes/{orderNo}/delete
+static String processMobileDelete(int orderNo) =>
+    '$baseUrl$_mobile/processes/$orderNo/delete';
+ 
+/// POST /api/mobile/processes/{orderNo}/update-team
+static String processMobileUpdateTeam(int orderNo) =>
+    '$baseUrl$_mobile/processes/$orderNo/update-team';
+
+// ── Development Process endpoints ─────────────────────────────────────────
+  //
+  // NOTE: These are `static String` (NOT `static const String`) because
+  // they reference `baseUrl` via string interpolation, which is a
+  // runtime expression and therefore cannot be `const` in Dart.
+ 
+  static String get devProcessBase      => '$baseUrl$_mobile/development-process';
+  static String get devProcessList      => '$devProcessBase/processes';
+  static String get devProcessAllStages => '$devProcessBase/all-stages';
+  static String get devProcessTeams     => '$devProcessBase/teams';
+  static String get devProcessStore     => '$devProcessBase/store';
+  static String get devProcessUpdate    => '$devProcessBase/update';
+  static String get devProcessMaxOrder  => '$devProcessBase/max-order';
+  static String get devProcessAssign    => '$devProcessBase/assign';
+ 
+  // Parametric helpers — call like: ApiConstants.devProcessEdit(42)
+  static String devProcessEdit(int processId)    => '$devProcessBase/edit/$processId';
+  static String devProcessDelete(int processId)  => '$devProcessBase/delete/$processId';
+  static String devProcessProject(int projectId) => '$devProcessBase/project/$projectId';
+  static String devProcessTeamMembers(int teamId)=> '$devProcessBase/team-members/$teamId';   
 }

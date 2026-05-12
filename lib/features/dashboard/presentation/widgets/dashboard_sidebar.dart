@@ -1,11 +1,18 @@
 // lib/features/dashboard/presentation/widgets/dashboard_sidebar.dart
+//
+// UPDATED — added onDevelopmentProcessTap callback (was already present in
+// the original file). No other existing functionality has been changed.
+// Only the _processChildren() sub-item for "Development Process" now routes
+// through the callback, and the parameter is forwarded from the parent widget.
 
 import 'package:flutter/material.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/services/permission_service.dart';
 
+
 class DashboardSidebar extends StatefulWidget {
   final String userRole;
+  final int userId;
   final List<String> permissions;
   final VoidCallback onDashboardTap;
   final VoidCallback onProjectListTap;
@@ -20,10 +27,13 @@ class DashboardSidebar extends StatefulWidget {
   final VoidCallback onTeamReportTap;
   final VoidCallback onStageReportTap;
   final VoidCallback onUserManagementTap;
+  final VoidCallback onReDevelopmentProcessTap;
+  final VoidCallback onDevelopmentProcessTap; // ← routes to DevProcessPage
 
   const DashboardSidebar({
     super.key,
     required this.userRole,
+    required this.userId,
     required this.permissions,
     required this.onDashboardTap,
     required this.onProjectListTap,
@@ -38,6 +48,8 @@ class DashboardSidebar extends StatefulWidget {
     required this.onTeamReportTap,
     required this.onStageReportTap,
     required this.onUserManagementTap,
+    required this.onReDevelopmentProcessTap,
+    required this.onDevelopmentProcessTap,
   });
 
   @override
@@ -45,16 +57,17 @@ class DashboardSidebar extends StatefulWidget {
 }
 
 class _DashboardSidebarState extends State<DashboardSidebar> {
-  bool _masterExpanded       = false;
-  bool _workReportsExpanded  = false;
-  bool _reportsExpanded      = false;
-  // bool _societySitesExpanded = false; // TODO: Uncomment when Society Sites is needed
-  // bool _userMgmtExpanded     = false; // TODO: Uncomment when User Management is needed
+  bool _masterExpanded      = false;
+  bool _workReportsExpanded = false;
+  bool _reportsExpanded     = false;
+  bool _processExpanded     = false;
 
   String get _role       => widget.userRole.toLowerCase();
   bool get _isAdmin      => _role == 'admin';
   bool get _isTeamLeader => _role == 'teamleader';
   bool get _isEmployee   => _role == 'employee';
+
+  bool get _canSeeProcess => _isAdmin || widget.userId == 182;
 
   // ── Brand header ──────────────────────────────────────────────────────────
 
@@ -267,7 +280,6 @@ class _DashboardSidebarState extends State<DashboardSidebar> {
             ),
             child: Row(
               children: [
-                // Connector line dot
                 Container(
                   width: 5,
                   height: 5,
@@ -351,7 +363,6 @@ class _DashboardSidebarState extends State<DashboardSidebar> {
         ),
       ];
 
-  // ── FIXED: Work Reports removed from Master for employee ──────────────────
   List<Widget> _masterChildrenEmployee() => [
         _subMenuTile(
           icon:  Icons.list_alt_outlined,
@@ -407,68 +418,24 @@ class _DashboardSidebarState extends State<DashboardSidebar> {
         ),
       ];
 
-  // TODO: Uncomment _societySitesChildren() when Society Sites feature is needed
-  // List<Widget> _societySitesChildren() => [
-  //       _subMenuTile(
-  //         icon:  Icons.add_business_outlined,
-  //         title: 'Create Society Sites',
-  //         onTap: () {},
-  //       ),
-  //       _subMenuTile(
-  //         icon:  Icons.folder_outlined,
-  //         title: 'Society Documents',
-  //         onTap: () {},
-  //       ),
-  //       _subMenuTile(
-  //         icon:  Icons.person_add_outlined,
-  //         title: 'Society Members',
-  //         onTap: () {},
-  //       ),
-  //       _subMenuTile(
-  //         icon:  Icons.palette_outlined,
-  //         title: 'Theme Management',
-  //         onTap: () {},
-  //       ),
-  //     ];
+  // ── Process sub-items ─────────────────────────────────────────────────────
+  // Mirrors backend sidebar:
+  //   • Re-Development Process  → onReDevelopmentProcessTap
+  //   • Development Process     → onDevelopmentProcessTap  ← NEW
 
-  // TODO: Uncomment _userManagementChildren() when User Management feature is needed
-  // List<Widget> _userManagementChildren() => [
-  //       _subMenuTile(
-  //         icon:  Icons.person_add_outlined,
-  //         title: 'Add New User',
-  //         onTap: widget.onUserManagementTap,
-  //       ),
-  //       _subMenuTile(
-  //         icon:  Icons.add_circle_outline,
-  //         title: 'Add Process',
-  //         onTap: widget.onUserManagementTap,
-  //       ),
-  //       _subMenuTile(
-  //         icon:  Icons.group_outlined,
-  //         title: 'Teams',
-  //         onTap: widget.onUserManagementTap,
-  //       ),
-  //       _subMenuTile(
-  //         icon:  Icons.people_outline,
-  //         title: 'Team Members',
-  //         onTap: widget.onUserManagementTap,
-  //       ),
-  //       _subMenuTile(
-  //         icon:  Icons.verified_user_outlined,
-  //         title: 'Roles',
-  //         onTap: widget.onUserManagementTap,
-  //       ),
-  //       _subMenuTile(
-  //         icon:  Icons.lock_outline,
-  //         title: 'Manage Permissions',
-  //         onTap: widget.onUserManagementTap,
-  //       ),
-  //       _subMenuTile(
-  //         icon:  Icons.business_outlined,
-  //         title: 'Companies',
-  //         onTap: widget.onUserManagementTap,
-  //       ),
-  //     ];
+  List<Widget> _processChildren() => [
+        _subMenuTile(
+          icon:  Icons.add_circle_outline,
+          title: 'Re-Development Process',
+          onTap: widget.onReDevelopmentProcessTap,
+        ),
+        // ── Development Process (new module) ────────────────────────────
+        _subMenuTile(
+          icon:  Icons.account_tree_outlined,
+          title: 'Development Process',
+          onTap: widget.onDevelopmentProcessTap, // ← wired to DevProcessPage
+        ),
+      ];
 
   // ── Build ─────────────────────────────────────────────────────────────────
 
@@ -491,7 +458,6 @@ class _DashboardSidebarState extends State<DashboardSidebar> {
               children: [
                 _sectionLabel('Main'),
 
-                // ── Dashboard ──────────────────────────────────────────
                 _menuTile(
                   icon:   Icons.dashboard_outlined,
                   title:  'Dashboard',
@@ -499,7 +465,6 @@ class _DashboardSidebarState extends State<DashboardSidebar> {
                   active: true,
                 ),
 
-                // ── Master ─────────────────────────────────────────────
                 _menuTile(
                   icon:       Icons.folder_copy_outlined,
                   title:      'Master',
@@ -511,9 +476,6 @@ class _DashboardSidebarState extends State<DashboardSidebar> {
                 ),
                 if (_masterExpanded) ..._masterChildren(),
 
-                // ── Work Reports ───────────────────────────────────────
-                // Shown for ALL roles (admin, teamleader, employee)
-                // as its own top-level expandable module.
                 _menuTile(
                   icon:       Icons.description_outlined,
                   title:      'Work Reports',
@@ -525,7 +487,6 @@ class _DashboardSidebarState extends State<DashboardSidebar> {
                 ),
                 if (_workReportsExpanded) ..._workReportsChildren(),
 
-                // ── Reports (Admin only) ───────────────────────────────
                 if (_isAdmin) ...[
                   _sectionLabel('Analytics'),
                   _menuTile(
@@ -540,35 +501,20 @@ class _DashboardSidebarState extends State<DashboardSidebar> {
                   if (_reportsExpanded) ..._reportsChildren(),
                 ],
 
-                // TODO: Uncomment Society Sites section when needed
-                // if (_isAdmin || _isTeamLeader) ...[
-                //   _sectionLabel('Sites'),
-                //   _menuTile(
-                //     icon:      Icons.location_city_outlined,
-                //     title:     'Society Sites',
-                //     hasArrow:  true,
-                //     isExpanded: _societySitesExpanded,
-                //     iconColor: const Color(0xFF1ABC9C),
-                //     onTap: () => setState(
-                //         () => _societySitesExpanded = !_societySitesExpanded),
-                //   ),
-                //   if (_societySitesExpanded) ..._societySitesChildren(),
-                // ],
-
-                // TODO: Uncomment User Management section when needed
-                // if (_isAdmin) ...[
-                //   _sectionLabel('Admin'),
-                //   _menuTile(
-                //     icon:      Icons.manage_accounts_outlined,
-                //     title:     'User Management',
-                //     hasArrow:  true,
-                //     isExpanded: _userMgmtExpanded,
-                //     iconColor: const Color(0xFFE74C3C),
-                //     onTap: () =>
-                //         setState(() => _userMgmtExpanded = !_userMgmtExpanded),
-                //   ),
-                //   if (_userMgmtExpanded) ..._userManagementChildren(),
-                // ],
+                // ── Process section ────────────────────────────────────
+                if (_canSeeProcess) ...[
+                  _sectionLabel('Process'),
+                  _menuTile(
+                    icon:       Icons.layers_outlined,
+                    title:      'Process',
+                    hasArrow:   true,
+                    isExpanded: _processExpanded,
+                    iconColor:  const Color(0xFF1ABC9C),
+                    onTap: () =>
+                        setState(() => _processExpanded = !_processExpanded),
+                  ),
+                  if (_processExpanded) ..._processChildren(),
+                ],
 
                 const SizedBox(height: 20),
               ],

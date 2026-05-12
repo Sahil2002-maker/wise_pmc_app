@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/services/api_service.dart';
 import '../../../../core/services/auth_storage_service.dart';
-import '../../../../core/services/permission_service.dart';
+// REMOVED: '../../../../core/services/permission_service.dart' — unused import
 import '../../data/models/project_dashboard_model.dart';
 import '../widgets/dashboard_header.dart';
 import '../widgets/dashboard_sidebar.dart';
@@ -19,6 +19,8 @@ import '../../../project_report/presentation/pages/project_report_page.dart';
 import '../../../team_report/presentation/pages/team_report_page.dart';
 import '../../../stage_report/presentation/pages/stage_report_page.dart';
 import '../../../process_list/presentation/pages/process_list_page.dart';
+import '../../../process/presentation/pages/process_management_page.dart';
+import '../../../development_process/presentation/pages/dev_process_page.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -40,8 +42,9 @@ class _DashboardPageState extends State<DashboardPage>
   bool isLoading = true;
   String? errorMessage;
 
-  String userName = 'Admin';
-  String userRole = 'admin';
+  String userName    = 'Admin';
+  String userRole    = 'admin';
+  int    userId      = 0;         // ← NEW: loaded from AuthStorageService
   List<String> permissions = [];
 
   @override
@@ -70,11 +73,13 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _loadLocalUser() async {
     final savedName        = await AuthStorageService.getUserName();
     final savedRole        = await AuthStorageService.getUserRole();
+    final savedUserId      = await AuthStorageService.getUserId();   // ← NEW
     final savedPermissions = await AuthStorageService.getPermissions();
     if (!mounted) return;
     setState(() {
       userName    = (savedName == null || savedName.isEmpty) ? 'Admin' : savedName;
       userRole    = (savedRole == null || savedRole.isEmpty) ? 'admin' : savedRole;
+      userId      = savedUserId ?? 0;                                // ← NEW
       permissions = savedPermissions;
     });
   }
@@ -149,6 +154,20 @@ class _DashboardPageState extends State<DashboardPage>
   void _openTeamReport()    => _navigateTo(const TeamReportPage());
   void _openStageReport()   => _navigateTo(const StageReportPage());
 
+  // ── Process navigation ────────────────────────────────────────────────────
+  // Navigates to the existing ProcessManagementPage.
+  // If your page accepts a param to distinguish Re-Development vs Development,
+  // add it here. Otherwise both items open the same page (matches backend
+  // where both routes are under the same 'process.index' controller).
+
+  void _openReDevelopmentProcess() => _navigateTo(
+        const ProcessManagementPage(),
+      );
+
+  void _openDevelopmentProcess() => _navigateTo(
+        const DevProcessPage(),
+      );
+
   void _showComingSoon(String title) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -169,23 +188,28 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
+  // ── Sidebar builder ───────────────────────────────────────────────────────
+
   DashboardSidebar _buildSidebar() {
     return DashboardSidebar(
-      userRole:            userRole,
-      permissions:         permissions,
-      onDashboardTap:      () {},
-      onProjectListTap:    _openProjectList,
-      onAllMeetingsTap:    () => _showComingSoon('All Meetings'),
-      onGeneralTasksTap:   _openGeneralTasks,
-      onTaskCalendarTap:   _openTaskCalendar,
-      onWorkReportsTap:    _openWorkReports,
-      onAllTasksTap:       _openAllTasks,
-      onReportsTap:        () => _showComingSoon('Reports'),
-      onEmployeeReportTap: () => _navigateTo(const EmployeeReportPage()),
-      onProjectReportTap:  _openProjectReport,
-      onTeamReportTap:     _openTeamReport,
-      onStageReportTap:    _openStageReport,
-      onUserManagementTap: () => _showComingSoon('User Management'),
+      userRole:                   userRole,
+      userId:                     userId,                      // ← FIX: was missing
+      permissions:                permissions,
+      onDashboardTap:             () {},
+      onProjectListTap:           _openProjectList,
+      onAllMeetingsTap:           () => _showComingSoon('All Meetings'),
+      onGeneralTasksTap:          _openGeneralTasks,
+      onTaskCalendarTap:          _openTaskCalendar,
+      onWorkReportsTap:           _openWorkReports,
+      onAllTasksTap:              _openAllTasks,
+      onReportsTap:               () => _showComingSoon('Reports'),
+      onEmployeeReportTap:        () => _navigateTo(const EmployeeReportPage()),
+      onProjectReportTap:         _openProjectReport,
+      onTeamReportTap:            _openTeamReport,
+      onStageReportTap:           _openStageReport,
+      onUserManagementTap:        () => _showComingSoon('User Management'),
+      onReDevelopmentProcessTap:  _openReDevelopmentProcess,   // ← FIX: was missing
+      onDevelopmentProcessTap:    _openDevelopmentProcess,     // ← FIX: was missing
     );
   }
 
@@ -474,10 +498,10 @@ class _DashboardPageState extends State<DashboardPage>
               strokeWidth: 2.5,
             ),
             const SizedBox(height: 14),
-            Text(
+            const Text(
               'Loading projects...',
               style: TextStyle(
-                color: const Color(0xFF8E9BB5),
+                color: Color(0xFF8E9BB5),
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
               ),
@@ -559,10 +583,10 @@ class _DashboardPageState extends State<DashboardPage>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
+            const Icon(
               Icons.search_off_rounded,
               size: 52,
-              color: const Color(0xFFCDD2DD),
+              color: Color(0xFFCDD2DD),
             ),
             const SizedBox(height: 12),
             const Text(
