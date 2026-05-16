@@ -11,7 +11,7 @@ import '../../../../core/utils/api_exception.dart';
 import '../../data/models/development_process_model.dart';
 import '../../data/services/development_process_api.dart';
 import '../widgets/assign_process_sheet.dart';
-import 'document_viewer_page.dart'; // ← NEW import
+import 'document_viewer_page.dart';
 
 // ─── Role helpers ─────────────────────────────────────────────────────────────
 
@@ -58,14 +58,19 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
   bool _isAdmin = false;
   bool _isTeamLeader = false;
 
-  // Stage data
-  final List<DevelopmentStageData> _stages = [];
+  // Stage data — always 4 stages (0–3)
+  final List<DevelopmentStageData> _stages = List.generate(
+    4,
+    (i) => DevelopmentStageData(
+      stageNumber: i,
+      stageLabel: 'Stage $i',
+      processes: const [],
+    ),
+  );
 
   // Track in-progress actions per orderNo key
   final Set<String> _assigningKeys = {};
   final Set<String> _uploadingKeys = {};
-
-  // ── NEW: track which file is currently being fetched (URL lookup) ─────────
   final Set<String> _viewingKeys = {};
 
   @override
@@ -91,10 +96,12 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
   Future<void> _init() async {
     final adminFlag = await _checkIsAdmin();
     final tlFlag = await _checkIsTeamLeader();
-    setState(() {
-      _isAdmin = adminFlag;
-      _isTeamLeader = tlFlag;
-    });
+    if (mounted) {
+      setState(() {
+        _isAdmin = adminFlag;
+        _isTeamLeader = tlFlag;
+      });
+    }
     await _loadProcesses();
   }
 
@@ -106,32 +113,151 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
       _error = null;
     });
     try {
-      final raw =
-          await DevelopmentProcessApi.fetchDevelopmentProcesses(widget.projectId);
+      final raw = await DevelopmentProcessApi.fetchDevelopmentProcesses(
+          widget.projectId);
+
+      debugPrint('[DevelopmentProcessPage] raw response keys: ${raw.keys.toList()}');
+      debugPrint('[DevelopmentProcessPage] raw response: $raw');
 
       final newStages = _parseStages(raw);
 
-      setState(() {
-        _stages
-          ..clear()
-          ..addAll(newStages);
-        _loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          for (int i = 0; i < 4; i++) {
+            _stages[i] = i < newStages.length
+                ? newStages[i]
+                : DevelopmentStageData(
+                    stageNumber: i,
+                    stageLabel: 'Stage $i',
+                    processes: const [],
+                  );
+          }
+          _loading = false;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _error = e is ApiException ? e.message : e.toString();
-        _loading = false;
-      });
+      debugPrint('[DevelopmentProcessPage] error: $e');
+      if (mounted) {
+        setState(() {
+          _error = e is ApiException ? e.message : e.toString();
+          _loading = false;
+        });
+      }
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // FIX: _parseStages now correctly handles the API response format.
+  //
+  // The MobileDevelopmentProcessController::getProjectProcesses() returns:
+  // {
+  //   "success": true,
+  //   "project": {...},
+  //   "role": "admin",
+  //   "stages": [
+  //     {
+  //       "stage": 0,              ← integer
+  //       "stage_label": "Stage 0",
+  //       "processes": [...],
+  //       "assignments": [...]
+  //     },
+  //     ...
+  //   ]
+  // }
+  //
+  // The OLD code checked `stagesMap is Map` and looked for keys "stage0",
+  // "stage1" etc. — both wrong. The correct structure has "stages" as a List
+  // of objects each with a numeric "stage" key.
+  // ─────────────────────────────────────────────────────────────────────────
   List<DevelopmentStageData> _parseStages(Map<String, dynamic> raw) {
-    // Try nested 'stages' key first
-    final stagesMap = raw['stages'];
-    if (stagesMap is Map) {
+    // ── Strategy 1: "stages" key is a List (primary API format) ──────────
+    final stagesList = raw['stages'];
+    if (stagesList is List && stagesList.isNotEmpty) {
+      debugPrint('[DevelopmentProcessPage] parsing stages as List (${stagesList.length} items)');
+
+      // Build a map from stage number → DevelopmentStageData
+      final stageMap = <int, DevelopmentStageData>{};
+
+      for (final item in stagesList) {
+        if (item is! Map<String, dynamic>) continue;
+
+        // The stage number can come as int or string
+        final stageNum = int.tryParse(item['stage']?.toString() ?? '') ?? -1;
+        if (stageNum < 0 || stageNum > 3) continue;
+
+        final rawProcesses = item['processes'];
+        final rawAssignments = item['assignments'];
+
+        // Build a lookup of assignments keyed by process_id
+        final assignmentsByProcessId = <int, DevelopmentProcessAssignment>{};
+        if (rawAssignments is List) {
+          for (final a in rawAssignments) {
+            if (a is Map<String, dynamic>) {
+              final assignment = DevelopmentProcessAssignment.fromJson(a);
+              if (assignment.processId != null) {
+                assignmentsByProcessId[assignment.processId!] = assignment;
+              }
+            }
+          }
+        }
+
+        final processes = <DevelopmentProcessItem>[];
+        if (rawProcesses is List) {
+          for (final p in rawProcesses) {
+            if (p is! Map<String, dynamic>) continue;
+
+            // Merge in assignment from the separate assignments list if not
+            // already embedded inside the process object.
+            DevelopmentProcessAssignment? assignment;
+            final embedded = p['assignment'];
+            if (embedded is Map<String, dynamic>) {
+              assignment = DevelopmentProcessAssignment.fromJson(embedded);
+            } else {
+              final pid = int.tryParse(p['process_id']?.toString() ?? '');
+              if (pid != null) {
+                assignment = assignmentsByProcessId[pid];
+              }
+            }
+
+            processes.add(DevelopmentProcessItem(
+              processId: int.tryParse(p['process_id']?.toString() ?? ''),
+              processName: p['process_name']?.toString() ?? '',
+              orderNo: int.tryParse(p['order_no']?.toString() ?? ''),
+              stage: p['stage']?.toString() ?? 'stage $stageNum',
+              teamId: int.tryParse(p['team_id']?.toString() ?? ''),
+              teamName: p['team_name']?.toString() ??
+                  (p['team'] is Map ? p['team']['team_name']?.toString() : null),
+              teamColor: p['team_color']?.toString() ??
+                  (p['team'] is Map ? p['team']['team_color']?.toString() : null),
+              assignment: assignment,
+            ));
+          }
+        }
+
+        stageMap[stageNum] = DevelopmentStageData(
+          stageNumber: stageNum,
+          stageLabel: item['stage_label']?.toString() ?? 'Stage $stageNum',
+          processes: processes,
+        );
+      }
+
+      // Return sorted list for stages 0–3, filling gaps with empty stages
+      return List.generate(4, (i) {
+        return stageMap[i] ??
+            DevelopmentStageData(
+              stageNumber: i,
+              stageLabel: 'Stage $i',
+              processes: const [],
+            );
+      });
+    }
+
+    // ── Strategy 2: "stages" key is a Map with "stage0", "stage1"… keys ──
+    if (stagesList is Map) {
+      debugPrint('[DevelopmentProcessPage] parsing stages as Map');
       return List.generate(4, (i) {
         final key = 'stage$i';
-        final list = stagesMap[key] as List? ?? [];
+        final list = stagesList[key] as List? ?? [];
         return DevelopmentStageData(
           stageNumber: i,
           stageLabel: 'Stage $i',
@@ -143,26 +269,42 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
       });
     }
 
-    // Try flat keys: stage0Processes, stage1Processes, etc.
-    return List.generate(4, (i) {
-      final key = 'stage${i}Processes';
-      final list = (raw[key] as List?) ?? [];
-      return DevelopmentStageData(
+    // ── Strategy 3: Flat stage{N}Processes keys at the top level ─────────
+    final hasFlat = raw.keys.any((k) => k.startsWith('stage') && k.endsWith('Processes'));
+    if (hasFlat) {
+      debugPrint('[DevelopmentProcessPage] parsing stages as flat keys');
+      return List.generate(4, (i) {
+        final key = 'stage${i}Processes';
+        final list = (raw[key] as List?) ?? [];
+        return DevelopmentStageData(
+          stageNumber: i,
+          stageLabel: 'Stage $i',
+          processes: list
+              .whereType<Map<String, dynamic>>()
+              .map(DevelopmentProcessItem.fromJson)
+              .toList(),
+        );
+      });
+    }
+
+    // ── Fallback: return empty stages ─────────────────────────────────────
+    debugPrint('[DevelopmentProcessPage] WARNING: could not parse stages from response. Keys: ${raw.keys.toList()}');
+    return List.generate(
+      4,
+      (i) => DevelopmentStageData(
         stageNumber: i,
         stageLabel: 'Stage $i',
-        processes: list
-            .whereType<Map<String, dynamic>>()
-            .map(DevelopmentProcessItem.fromJson)
-            .toList(),
-      );
-    });
+        processes: const [],
+      ),
+    );
   }
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
   bool get _canAssign => _isAdmin || _isTeamLeader;
 
-  Future<void> _openAssignSheet(DevelopmentProcessItem process, int stageNum) async {
+  Future<void> _openAssignSheet(
+      DevelopmentProcessItem process, int stageNum) async {
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
@@ -203,7 +345,8 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
     }
   }
 
-  Future<void> _uploadFile(DevelopmentProcessItem process, int stageNum) async {
+  Future<void> _uploadFile(
+      DevelopmentProcessItem process, int stageNum) async {
     final key = '${stageNum}_${process.orderNo}';
     if (_uploadingKeys.contains(key)) return;
 
@@ -262,28 +405,22 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
     }
   }
 
-  // ── UPDATED _viewFile — opens in-app viewer instead of external browser ───
-
   Future<void> _viewFile(
     DevelopmentProcessItem process,
     int stageNum,
     String filePath,
   ) async {
-    // Guard: empty path
     if (filePath.isEmpty) {
-      if (mounted) {
-        _showErrorSnackBar('No file is attached to this process.');
-      }
+      if (mounted) _showErrorSnackBar('No file is attached to this process.');
       return;
     }
 
     final key = '${stageNum}_${process.orderNo}';
-    if (_viewingKeys.contains(key)) return; // already fetching
+    if (_viewingKeys.contains(key)) return;
 
     setState(() => _viewingKeys.add(key));
 
     try {
-      // Fetch the temporary/signed URL from the API
       final url = await DevelopmentProcessApi.getFileUrl(filePath);
 
       if (url.isEmpty) {
@@ -292,7 +429,6 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
 
       if (!mounted) return;
 
-      // Navigate to in-app viewer — no external browser involved
       await Navigator.push(
         context,
         MaterialPageRoute(
@@ -320,10 +456,8 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
                 color: Colors.white, size: 18),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
+              child: Text(message,
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
             ),
           ],
         ),
@@ -344,8 +478,7 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
       backgroundColor: const Color(0xFFF0F4F8),
       body: _loading
           ? const Center(
-              child:
-                  CircularProgressIndicator(color: AppColors.primaryGreen))
+              child: CircularProgressIndicator(color: AppColors.primaryGreen))
           : _error != null
               ? _buildError()
               : _buildBody(),
@@ -430,6 +563,13 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
         icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
         onPressed: () => Navigator.pop(context),
       ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+          onPressed: _loading ? null : _loadProcesses,
+          tooltip: 'Refresh',
+        ),
+      ],
       flexibleSpace: FlexibleSpaceBar(
         background: Container(
           decoration: const BoxDecoration(
@@ -495,7 +635,8 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
         unselectedLabelStyle:
             const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
         tabs: List.generate(4, (i) {
-          final count = i < _stages.length ? _stages[i].processes.length : 0;
+          final count =
+              i < _stages.length ? _stages[i].processes.length : 0;
           return Tab(
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -552,10 +693,9 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
               stageNumber: stage.stageNumber,
               canAssign: _canAssign,
               uploadingKeys: _uploadingKeys,
-              viewingKeys: _viewingKeys, // ← pass viewing state
+              viewingKeys: _viewingKeys,
               onAssign: () => _openAssignSheet(process, stage.stageNumber),
               onUpload: () => _uploadFile(process, stage.stageNumber),
-              // ← now passes process + stageNum so _viewFile can build the key
               onViewFile: () => _viewFile(
                 process,
                 stage.stageNumber,
@@ -638,6 +778,12 @@ class _EmptyStage extends StatelessWidget {
                   color: Color(0xFF94A3B8),
                   fontSize: 15,
                   fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          const Text(
+            'Processes added via the web admin will appear here.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Color(0xFFCBD5E1), fontSize: 12),
+          ),
         ],
       ),
     );
@@ -652,7 +798,7 @@ class _ProcessCard extends StatelessWidget {
   final int stageNumber;
   final bool canAssign;
   final Set<String> uploadingKeys;
-  final Set<String> viewingKeys; // ← NEW
+  final Set<String> viewingKeys;
   final VoidCallback onAssign;
   final VoidCallback onUpload;
   final VoidCallback onViewFile;
@@ -672,7 +818,7 @@ class _ProcessCard extends StatelessWidget {
   String get _uploadKey => '${stageNumber}_${process.orderNo}';
   String get _viewKey => '${stageNumber}_${process.orderNo}';
   bool get _isUploading => uploadingKeys.contains(_uploadKey);
-  bool get _isViewing => viewingKeys.contains(_viewKey); // ← NEW
+  bool get _isViewing => viewingKeys.contains(_viewKey);
 
   @override
   Widget build(BuildContext context) {
@@ -697,9 +843,7 @@ class _ProcessCard extends StatelessWidget {
             // Colored top accent bar
             Container(
               height: 3,
-              decoration: BoxDecoration(
-                color: _stageColor(stageNumber),
-              ),
+              decoration: BoxDecoration(color: _stageColor(stageNumber)),
             ),
 
             Padding(
@@ -750,8 +894,7 @@ class _ProcessCard extends StatelessWidget {
                               Row(
                                 children: [
                                   const Icon(Icons.calendar_today_rounded,
-                                      size: 11,
-                                      color: Color(0xFFEF4444)),
+                                      size: 11, color: Color(0xFFEF4444)),
                                   const SizedBox(width: 3),
                                   Text(
                                     'Deadline: ${assign!.deadline}',
@@ -789,8 +932,7 @@ class _ProcessCard extends StatelessWidget {
                           child: Row(
                             children: [
                               const Icon(Icons.person_rounded,
-                                  size: 13,
-                                  color: Color(0xFF64748B)),
+                                  size: 13, color: Color(0xFF64748B)),
                               const SizedBox(width: 4),
                               Expanded(
                                 child: Text(
@@ -842,15 +984,13 @@ class _ProcessCard extends StatelessWidget {
                           onTap: _isUploading ? null : onUpload,
                         ),
 
-                      // ── UPDATED View button — shows spinner while fetching URL ──
-                      if (assign != null &&
-                          !assign.isNA &&
-                          assign.hasFile)
+                      // View button
+                      if (assign != null && !assign.isNA && assign.hasFile)
                         _ActionButton(
                           label: 'View',
                           icon: Icons.visibility_rounded,
                           color: const Color(0xFF0EA5E9),
-                          loading: _isViewing, // ← spinner while URL is fetched
+                          loading: _isViewing,
                           onTap: _isViewing ? null : onViewFile,
                         ),
                     ],
@@ -916,15 +1056,12 @@ class _StatusBadge extends StatelessWidget {
           Container(
               width: 6,
               height: 6,
-              decoration:
-                  BoxDecoration(color: color, shape: BoxShape.circle)),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
           const SizedBox(width: 4),
           Text(
             label,
             style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: color),
+                fontSize: 10, fontWeight: FontWeight.w700, color: color),
           ),
         ],
       ),
@@ -958,9 +1095,7 @@ class _TeamChip extends StatelessWidget {
       child: Text(
         name,
         style: const TextStyle(
-            color: Colors.white,
-            fontSize: 10,
-            fontWeight: FontWeight.w700),
+            color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
       ),
     );
   }

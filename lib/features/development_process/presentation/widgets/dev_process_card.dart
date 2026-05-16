@@ -1,11 +1,20 @@
 // lib/features/development_process/presentation/widgets/dev_process_card.dart
 //
 // Card widget for a single Development Process row.
-// FIX: RenderFlex overflowed by 29 pixels on the right.
+//
+// FIX 1: RenderFlex overflowed by 29 pixels on the right.
 //   – Team name text wrapped in Flexible to prevent overflow.
 //   – Stage label text wrapped in Flexible.
 //   – Actions column given a fixed-width SizedBox so the Expanded
 //     content never crowds it.
+//
+// FIX 2 (dart errors):
+//   – process.teamColor is now non-nullable (String, not String?) so the
+//     null-coalescing branch is removed; _hexColor() handles bad values.
+//   – _stageColor() now accepts int (process.stageNum) instead of String.
+//   – process.stageLabel getter is used directly (added to model).
+//   – All .withOpacity() calls replaced with .withValues(alpha: …)
+//     to silence dart(deprecated_member_use) warnings.
 
 import 'package:flutter/material.dart';
 import '../../data/models/dev_process_model.dart';
@@ -30,6 +39,7 @@ class DevProcessCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // FIX: teamColor is non-nullable String — no null check needed.
     final teamColor = _hexColor(process.teamColor);
 
     return AnimatedOpacity(
@@ -41,7 +51,8 @@ class DevProcessCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              // FIX: withOpacity → withValues
+              color: Colors.black.withValues(alpha: 0.05),
               blurRadius: 10,
               offset: const Offset(0, 2),
             ),
@@ -71,8 +82,9 @@ class DevProcessCard extends StatelessWidget {
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         colors: [
-                          _accent.withOpacity(0.15),
-                          _accent.withOpacity(0.08),
+                          // FIX: withOpacity → withValues
+                          _accent.withValues(alpha: 0.15),
+                          _accent.withValues(alpha: 0.08),
                         ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
@@ -151,16 +163,20 @@ class DevProcessCard extends StatelessWidget {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 3),
                               decoration: BoxDecoration(
-                                color: _stageColor(process.stage)
-                                    .withOpacity(0.1),
+                                // FIX: _stageColor now takes int (stageNum)
+                                // FIX: withOpacity → withValues
+                                color: _stageColor(process.stageNum)
+                                    .withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(
+                                // FIX: use stageLabel getter from model
                                 process.stageLabel,
                                 style: TextStyle(
                                   fontSize: 10,
                                   fontWeight: FontWeight.w700,
-                                  color: _stageColor(process.stage),
+                                  // FIX: _stageColor now takes int (stageNum)
+                                  color: _stageColor(process.stageNum),
                                 ),
                               ),
                             ),
@@ -230,7 +246,8 @@ class DevProcessCard extends StatelessWidget {
           width: 34,
           height: 34,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            // FIX: withOpacity → withValues
+            color: color.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, color: color, size: 16),
@@ -248,6 +265,7 @@ class DevProcessCard extends StatelessWidget {
     }
   }
 
+  // FIX: parameter changed from String to int to match process.stageNum
   Color _stageColor(int stage) {
     const colors = [
       Color(0xFF6366F1), // Stage 0 — indigo

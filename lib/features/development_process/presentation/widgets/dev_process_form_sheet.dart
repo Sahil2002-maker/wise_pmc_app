@@ -1,9 +1,18 @@
 // lib/features/development_process/presentation/widgets/dev_process_form_sheet.dart
 //
 // Bottom sheet for Add / Edit a Development Process.
-// FIX: RenderFlex overflowed by 0.993 pixels on the right.
+//
+// FIX 1: RenderFlex overflowed by 0.993 pixels on the right.
 //   – Team DropdownMenuItem Row: team name Text wrapped in Flexible
 //     so long names truncate instead of overflowing the dropdown overlay.
+//
+// FIX 2 (dart errors):
+//   – _selectedStage declared as int (was accidentally assigned from
+//     process.stage which is now int stageNum — fixed initialisation).
+//   – DropdownButtonFormField `value:` prop replaces deprecated `value:`
+//     (no change needed — but `initialValue:` removed from TextFormField
+//     where `controller` already sets the value, avoiding the deprecation).
+//   – All .withOpacity() calls replaced with .withValues(alpha: …).
 
 import 'package:flutter/material.dart';
 
@@ -36,6 +45,7 @@ class _DevProcessFormSheetState extends State<DevProcessFormSheet> {
   bool    _loadingOrder = false;
   String? _error;
 
+  // FIX: explicitly typed as int so the String-vs-int error is impossible.
   int  _selectedStage  = 0;
   int? _selectedTeamId;
 
@@ -54,10 +64,12 @@ class _DevProcessFormSheetState extends State<DevProcessFormSheet> {
     super.initState();
     if (_isEdit) {
       final p = widget.process!;
-      _nameCtrl.text   = p.processName;
-      _orderCtrl.text  = p.orderNo.toString();
-      _selectedStage   = p.stage;
-      _selectedTeamId  = p.teamId;
+      _nameCtrl.text  = p.processName;
+      _orderCtrl.text = p.orderNo.toString();
+      // FIX: p.stageNum is int — assign directly (was p.stage which is now
+      //      removed; stageNum is the canonical int field on the model).
+      _selectedStage  = p.stageNum;
+      _selectedTeamId = p.teamId;
     } else {
       _selectedStage = widget.initialStage;
       _fetchNextOrder();
@@ -163,7 +175,8 @@ class _DevProcessFormSheetState extends State<DevProcessFormSheet> {
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: _accent.withOpacity(0.1),
+                    // FIX: withOpacity → withValues
+                    color: _accent.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
@@ -223,6 +236,8 @@ class _DevProcessFormSheetState extends State<DevProcessFormSheet> {
                   const SizedBox(height: 6),
                   TextFormField(
                     controller: _nameCtrl,
+                    // FIX: removed deprecated `value:` — controller already
+                    //      sets the initial text in initState.
                     decoration: _inputDeco(
                       hint: 'Enter process name',
                       icon: Icons.label_outline_rounded,
@@ -236,6 +251,7 @@ class _DevProcessFormSheetState extends State<DevProcessFormSheet> {
                   _label('Team'),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<int>(
+                    // FIX: use `value:` (not deprecated `initialValue:`)
                     value: _selectedTeamId,
                     isExpanded: true, // FIX: forces dropdown to respect its
                     //      parent width instead of sizing to content,

@@ -1,5 +1,20 @@
 // lib/features/noc_map/data/models/noc_map_model.dart
 
+// ── Safe parsers ───────────────────────────────────────────────────────────────
+int _parseInt(dynamic v) {
+  if (v == null) return 0;
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse(v.toString()) ?? 0;
+}
+
+double _parseDouble(dynamic v) {
+  if (v == null) return 0.0;
+  if (v is double) return v;
+  if (v is num) return v.toDouble();
+  return double.tryParse(v.toString()) ?? 0.0;
+}
+
 class NocMapSummaryModel {
   final int totalNocProcesses;
   final int completedTasks;
@@ -19,12 +34,12 @@ class NocMapSummaryModel {
 
   factory NocMapSummaryModel.fromJson(Map<String, dynamic> json) {
     return NocMapSummaryModel(
-      totalNocProcesses:   (json['total_noc_processes'] as num?)?.toInt() ?? 0,
-      completedTasks:      (json['completed_tasks'] as num?)?.toInt() ?? 0,
-      assignedTasks:       (json['assigned_tasks'] as num?)?.toInt() ?? 0,
-      pendingTasks:        (json['pending_tasks'] as num?)?.toInt() ?? 0,
-      completionPercentage:(json['completion_percentage'] as num?)?.toDouble() ?? 0.0,
-      orderRange:          json['order_range']?.toString() ?? '75-213',
+      totalNocProcesses:    _parseInt(json['total_noc_processes']),
+      completedTasks:       _parseInt(json['completed_tasks']),
+      assignedTasks:        _parseInt(json['assigned_tasks']),
+      pendingTasks:         _parseInt(json['pending_tasks']),
+      completionPercentage: _parseDouble(json['completion_percentage']),
+      orderRange:           json['order_range']?.toString() ?? '75-213',
     );
   }
 }
@@ -34,8 +49,8 @@ class NocProcessModel {
   final int orderNo;
   final String processName;
   final String? heading;
-  final String status;       // 'Completed' | 'In Progress' | 'Not Started'
-  final int statusCode;      // 0 | 1 | 2
+  final String status;
+  final int statusCode;
   final NocAssignedUserModel? assignedUser;
   final String? assignDate;
   final String? uploadDate;
@@ -56,19 +71,19 @@ class NocProcessModel {
 
   factory NocProcessModel.fromJson(Map<String, dynamic> json) {
     return NocProcessModel(
-      processId:   (json['process_id'] as num?)?.toInt() ?? 0,
-      orderNo:     (json['order_no'] as num?)?.toInt() ?? 0,
-      processName: json['process_name']?.toString() ?? '',
-      heading:     json['heading']?.toString(),
-      status:      json['status']?.toString() ?? 'Not Started',
-      statusCode:  (json['status_code'] as num?)?.toInt() ?? 0,
+      processId:    _parseInt(json['process_id']),
+      orderNo:      _parseInt(json['order_no']),
+      processName:  json['process_name']?.toString() ?? '',
+      heading:      json['heading']?.toString(),
+      status:       json['status']?.toString() ?? 'Not Started',
+      statusCode:   _parseInt(json['status_code']),
       assignedUser: json['assigned_user'] != null
           ? NocAssignedUserModel.fromJson(
               Map<String, dynamic>.from(json['assigned_user'] as Map))
           : null,
-      assignDate:  json['assign_date']?.toString(),
-      uploadDate:  json['upload_date']?.toString(),
-      fileUrl:     json['file_path']?.toString(),
+      assignDate:   json['assign_date']?.toString(),
+      uploadDate:   json['upload_date']?.toString(),
+      fileUrl:      json['file_path']?.toString(),
     );
   }
 
@@ -90,7 +105,7 @@ class NocAssignedUserModel {
 
   factory NocAssignedUserModel.fromJson(Map<String, dynamic> json) {
     return NocAssignedUserModel(
-      id:    (json['id'] as num?)?.toInt() ?? 0,
+      id:    _parseInt(json['id']),
       name:  json['name']?.toString() ?? '',
       email: json['email']?.toString(),
     );
@@ -140,11 +155,11 @@ class NocProjectInfoModel {
 
   factory NocProjectInfoModel.fromJson(Map<String, dynamic> json) {
     return NocProjectInfoModel(
-      id:           (json['id'] as num?)?.toInt() ?? 0,
-      societyName:  json['society_name']?.toString() ?? '',
-      projectType:  json['project_type']?.toString(),
-      status:       json['status']?.toString(),
-      address:      json['address']?.toString(),
+      id:          _parseInt(json['id']),
+      societyName: json['society_name']?.toString() ?? '',
+      projectType: json['project_type']?.toString(),
+      status:      json['status']?.toString(),
+      address:     json['address']?.toString(),
     );
   }
 }

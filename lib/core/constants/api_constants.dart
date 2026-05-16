@@ -4,7 +4,7 @@ class ApiConstants {
   static const String _productionBase = 'https://test.pmc.wisehome.in';
   // ignore: unused_field
   static const String _localBase = 'http://10.0.2.2:8000';
-  static String get baseUrl => _localBase;
+  static String get baseUrl => _productionBase;
 
   static const Duration requestTimeout = Duration(seconds: 30);
   static const Duration connectTimeout = Duration(seconds: 30);
@@ -657,5 +657,11 @@ static String processMobileUpdateTeam(int orderNo) =>
   static String devProcessEdit(int processId)    => '$devProcessBase/edit/$processId';
   static String devProcessDelete(int processId)  => '$devProcessBase/delete/$processId';
   static String devProcessProject(int projectId) => '$devProcessBase/project/$projectId';
-  static String devProcessTeamMembers(int teamId)=> '$devProcessBase/team-members/$teamId';   
+  static String devProcessTeamMembers(int teamId)=> '$devProcessBase/team-members/$teamId';  
+
+  // ADD after devProcessTeamMembers line:
+static String get devProcessFileUrl => '$devProcessBase/file-url'; 
+
+static String devProcessUpload(int projectId) =>
+    '$devProcessBase/$projectId/upload';
 }

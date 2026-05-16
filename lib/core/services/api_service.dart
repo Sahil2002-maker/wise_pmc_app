@@ -42,6 +42,8 @@ import '../../features/team_report/data/models/team_report_models.dart';
 import '../../features/development_process/data/models/development_process_model.dart';
 import '../../features/process/data/models/process_model.dart';
 import '../../features/development_process/data/models/dev_process_model.dart';
+import '../../features/development_process/data/services/development_process_api.dart';
+import '../../features/development_process/data/services/dev_process_upload_service.dart';
 import '../constants/api_constants.dart';
 import '../utils/api_exception.dart';
 import 'auth_storage_service.dart';
@@ -212,8 +214,8 @@ static Future<http.Response> _rawPostWithMethod({
     final baseUri = Uri.parse(ApiConstants.calendarTasks);
     final parts   = <String>[];
  
-    for (final id in teamIds)   parts.add('team_id[]=$id');
-    for (final id in memberIds) parts.add('member_ids[]=$id');
+    for (final id in teamIds)   { parts.add('team_id[]=$id'); }
+    for (final id in memberIds) { parts.add('member_ids[]=$id'); }
     if (startDate != null && startDate.isNotEmpty) parts.add('start_date=$startDate');
     if (endDate   != null && endDate.isNotEmpty)   parts.add('end_date=$endDate');
  
@@ -8025,30 +8027,31 @@ static Future<ProjectReportData> generateProjectReport({
   // GET FILE TEMPORARY URL
   // GET /api/mobile/development-process/file-url?file_path=...
   // ─────────────────────────────────────────────────────────────────────────
+  // ── Get pre-signed S3 URL for a development-process document ──────────────
   static Future<String> getFileUrl(String filePath) async {
-    final url =
-        '${ApiConstants.baseUrl}/api/mobile/development-process/file-url'
-        '?file_path=${Uri.encodeQueryComponent(filePath)}';
- 
-    try {
-      final response = await http
-          .get(Uri.parse(url), headers: await _authHeaders())
-          .timeout(ApiConstants.requestTimeout);
- 
-      final body = _decode(response.body);
- 
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        return body['url']?.toString() ?? '';
-      }
-      throw ApiException('Could not retrieve file URL.');
-    } on TimeoutException {
-      throw ApiException('Request timed out.');
-    } catch (e) {
-      if (e is ApiException) rethrow;
-      throw ApiException('Get file URL error: $e');
-    }
+    return DevProcessUploadService.getFileUrl(filePath);
   }
 
+  // ── Upload a document for a development process row ────────────────────────
+  /// Uploads [file] to S3 via the backend and returns the response map:
+  ///   { success, file_path, file_name, file_size, mime_type }
+  ///
+  /// Endpoint: POST /api/mobile/development-process/{projectId}/upload
+  static Future<Map<String, dynamic>> uploadDevProcessDocument({
+    required int    projectId,
+    required int    processId,
+    required int    orderNo,
+    required File   file,
+    String?         fileName,
+  }) {
+    return DevProcessUploadService.uploadDocument(
+      projectId: projectId,
+      processId: processId,
+      orderNo:   orderNo,
+      file:      file,
+      fileName:  fileName,
+    );
+  }
   // ═══════════════════════════════════════════════════════════════════════════
 // RE-DEVELOPMENT PROCESS (PROCESS MANAGEMENT)
 // ═══════════════════════════════════════════════════════════════════════════

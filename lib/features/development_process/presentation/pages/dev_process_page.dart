@@ -3,6 +3,12 @@
 // Main page for the Development Process module.
 // Design: clean professional card layout matching the existing Re-Development
 // Process page, with a blue accent (0xFF2563EB) distinguishing it.
+//
+// FIX (dart errors):
+//   – _openEdit() passed p.stage (String) to initialStage (int) parameter.
+//     Changed to p.stageNum (int).
+//   – All .withOpacity() calls replaced with .withValues(alpha: …)
+//     to silence dart(deprecated_member_use) warnings.
 
 import 'package:flutter/material.dart';
 
@@ -34,9 +40,9 @@ class _DevProcessPageState extends State<DevProcessPage>
 
   // ── State ─────────────────────────────────────────────────────────────────
   late TabController _tabController;
-  bool   _loading    = true;
+  bool    _loading    = true;
   String? _error;
-  int    _currentTab = 0;
+  int     _currentTab = 0;
 
   final Map<int, List<DevProcessModel>> _stageProcesses = {
     0: [], 1: [], 2: [], 3: [],
@@ -148,7 +154,8 @@ class _DevProcessPageState extends State<DevProcessPage>
       builder: (_) => DevProcessFormSheet(
         teams:        _teams,
         process:      p,
-        initialStage: p.stage,
+        // FIX: p.stage was String — use p.stageNum (int) instead.
+        initialStage: p.stageNum,
       ),
     );
     if (ok == true && mounted) {
@@ -353,7 +360,8 @@ class _DevProcessPageState extends State<DevProcessPage>
                   Text(
                     'Manage development workflows across stages',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.75),
+                      // FIX: withOpacity → withValues
+                      color: Colors.white.withValues(alpha: 0.75),
                       fontSize: 12,
                     ),
                   ),
@@ -466,7 +474,7 @@ class _DevProcessPageState extends State<DevProcessPage>
   // ── Stage stats banner ────────────────────────────────────────────────────
 
   Widget _buildStageStats() {
-    final list    = _stageProcesses[_tabs[_currentTab].stage] ?? [];
+    final list     = _stageProcesses[_tabs[_currentTab].stage] ?? [];
     final withTeam = list.where((p) => p.teamName != null).length;
 
     return Container(
@@ -479,7 +487,8 @@ class _DevProcessPageState extends State<DevProcessPage>
         borderRadius: BorderRadius.circular(14),
         boxShadow: [
           BoxShadow(
-            color: _accent.withOpacity(0.3),
+            // FIX: withOpacity → withValues
+            color: _accent.withValues(alpha: 0.3),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -588,7 +597,8 @@ class _StatDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
         width: 1, height: 36,
-        color: Colors.white.withOpacity(0.25));
+        // FIX: withOpacity → withValues
+        color: Colors.white.withValues(alpha: 0.25));
   }
 }
 
