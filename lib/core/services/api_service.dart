@@ -1552,7 +1552,11 @@ static Future<void> assignProjectToTeamMember({
     final userRole =
         (await AuthStorageService.getUserRole() ?? '').trim().toLowerCase();
     if (userId == null || userId <= 0) return [];
-    if (userRole != 'leader' && userRole != 'team leader') return [];
+    if (userRole != 'leader' &&
+        userRole != 'teamleader' &&
+        userRole != 'team leader') {
+      return [];
+    }
     final teams = await fetchTeamsAndMembers();
     final ownedTeamIds = <int>[];
     for (final team in teams) {
@@ -1566,7 +1570,10 @@ static Future<void> assignProjectToTeamMember({
             member['id'] ?? member['user_id'] ?? member['member_id']);
         final role =
             (member['role']?.toString() ?? '').trim().toLowerCase();
-        return memberUserId == userId && role == 'leader';
+        return memberUserId == userId &&
+            (role == 'leader' ||
+                role == 'teamleader' ||
+                role == 'team leader');
       });
       if (hasCurrentUserAsLeader) {
         ownedTeamIds.add(teamId);

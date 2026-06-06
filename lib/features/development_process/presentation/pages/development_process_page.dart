@@ -146,49 +146,23 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // FIX: _parseStages now correctly handles the API response format.
-  //
-  // The MobileDevelopmentProcessController::getProjectProcesses() returns:
-  // {
-  //   "success": true,
-  //   "project": {...},
-  //   "role": "admin",
-  //   "stages": [
-  //     {
-  //       "stage": 0,              ← integer
-  //       "stage_label": "Stage 0",
-  //       "processes": [...],
-  //       "assignments": [...]
-  //     },
-  //     ...
-  //   ]
-  // }
-  //
-  // The OLD code checked `stagesMap is Map` and looked for keys "stage0",
-  // "stage1" etc. — both wrong. The correct structure has "stages" as a List
-  // of objects each with a numeric "stage" key.
-  // ─────────────────────────────────────────────────────────────────────────
   List<DevelopmentStageData> _parseStages(Map<String, dynamic> raw) {
     // ── Strategy 1: "stages" key is a List (primary API format) ──────────
     final stagesList = raw['stages'];
     if (stagesList is List && stagesList.isNotEmpty) {
       debugPrint('[DevelopmentProcessPage] parsing stages as List (${stagesList.length} items)');
 
-      // Build a map from stage number → DevelopmentStageData
       final stageMap = <int, DevelopmentStageData>{};
 
       for (final item in stagesList) {
         if (item is! Map<String, dynamic>) continue;
 
-        // The stage number can come as int or string
         final stageNum = int.tryParse(item['stage']?.toString() ?? '') ?? -1;
         if (stageNum < 0 || stageNum > 3) continue;
 
         final rawProcesses = item['processes'];
         final rawAssignments = item['assignments'];
 
-        // Build a lookup of assignments keyed by process_id
         final assignmentsByProcessId = <int, DevelopmentProcessAssignment>{};
         if (rawAssignments is List) {
           for (final a in rawAssignments) {
@@ -206,8 +180,6 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
           for (final p in rawProcesses) {
             if (p is! Map<String, dynamic>) continue;
 
-            // Merge in assignment from the separate assignments list if not
-            // already embedded inside the process object.
             DevelopmentProcessAssignment? assignment;
             final embedded = p['assignment'];
             if (embedded is Map<String, dynamic>) {
@@ -241,7 +213,6 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
         );
       }
 
-      // Return sorted list for stages 0–3, filling gaps with empty stages
       return List.generate(4, (i) {
         return stageMap[i] ??
             DevelopmentStageData(
@@ -287,7 +258,6 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
       });
     }
 
-    // ── Fallback: return empty stages ─────────────────────────────────────
     debugPrint('[DevelopmentProcessPage] WARNING: could not parse stages from response. Keys: ${raw.keys.toList()}');
     return List.generate(
       4,
@@ -305,6 +275,8 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
 
   Future<void> _openAssignSheet(
       DevelopmentProcessItem process, int stageNum) async {
+    // FIX: Pass projectId explicitly so AssignProcessSheet always includes
+    // project_id in the API payload — fixes "The project id field is required."
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
@@ -312,7 +284,7 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
       builder: (_) => AssignProcessSheet(
         process: process,
         stageNumber: stageNum,
-        projectId: widget.projectId,
+        projectId: widget.projectId, // ← always explicitly passed
       ),
     );
 
@@ -361,6 +333,7 @@ class _DevelopmentProcessPageState extends State<DevelopmentProcessPage>
     setState(() => _uploadingKeys.add(key));
 
     try {
+      // FIX: pass projectId explicitly — avoids "project_id is required" error
       await DevelopmentProcessApi.uploadDevelopmentProcessFile(
         projectId: widget.projectId,
         stageNumber: stageNum,

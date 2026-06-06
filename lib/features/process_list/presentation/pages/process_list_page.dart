@@ -1,13 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
- 
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:mime/mime.dart';
- 
+
 import '../../../../core/constants/api_constants.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/services/api_service.dart';
@@ -33,12 +33,53 @@ import '../../../minutes_of_meeting/presentation/minutes_of_meeting_page.dart';
 import '../../../cc_progress/presentation/cc_progress_page.dart';
 import '../../../layout_approval/presentation/layout_approval_page.dart';
 import '../../../oc_progress/presentation/oc_progress_page.dart';
- 
+
+String _resolveDocumentUrl(String rawPath) {
+  final path = rawPath.trim();
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    return path;
+  }
+
+  final base = ApiConstants.baseUrl.replaceAll(RegExp(r'/$'), '');
+  final rel = path.startsWith('/') ? path : '/$path';
+  return '$base$rel';
+}
+
+Future<void> _openDocumentUrl(
+  BuildContext context,
+  String? rawPath,
+  String title,
+) async {
+  if (rawPath == null || rawPath.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('No file path available'),
+      backgroundColor: Color(0xFFEF4444),
+    ));
+    return;
+  }
+
+  final fullUrl = _resolveDocumentUrl(rawPath);
+  final token = await AuthStorageService.getToken();
+  if (!context.mounted) return;
+
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => FileViewerPage(
+        url: fullUrl,
+        title: title,
+        authToken: token,
+        serverBaseUrl: ApiConstants.baseUrl,
+      ),
+    ),
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Stage 0 sub-tab keys
 // ─────────────────────────────────────────────────────────────────────────────
 enum Stage0SubTab { projectInfo, pmcApplication, pmcAppointment }
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Stage 3 sub-tab keys
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,56 +97,56 @@ enum Stage3SubTab {
   architectureChecklist,
   concretePourCard,
 }
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Role constants — mirrors backend role names exactly
 // ─────────────────────────────────────────────────────────────────────────────
 class _Roles {
-  static const admin       = 'admin';
-  static const teamLeader  = 'teamleader';
-  static const leader      = 'leader';
+  static const admin = 'admin';
+  static const teamLeader = 'teamleader';
+  static const leader = 'leader';
   static const teamLeader2 = 'team leader';
 }
- 
+
 class ProcessListPage extends StatefulWidget {
   final int projectId;
   final String projectName;
- 
+
   const ProcessListPage({
     super.key,
     required this.projectId,
     required this.projectName,
   });
- 
+
   @override
   State<ProcessListPage> createState() => _ProcessListPageState();
 }
- 
+
 class _ProcessListPageState extends State<ProcessListPage>
     with TickerProviderStateMixin {
   TabController? _tabController;
   TabController? _stage0SubTabController;
   TabController? _stage3SubTabController;
- 
+
   List<ProcessStageModel> _stages = [];
-  bool _isLoading    = true;
+  bool _isLoading = true;
   bool _isRefreshing = false;
   String? _errorMessage;
   int _currentTabIndex = 0;
   Stage0SubTab _currentStage0SubTab = Stage0SubTab.pmcApplication;
   Stage3SubTab _currentStage3SubTab = Stage3SubTab.dailyProgress;
- 
-  bool _isAdmin              = false;
-  bool _isTeamLeader         = false;
+
+  bool _isAdmin = false;
+  bool _isTeamLeader = false;
   bool _isMunicipalOrLiaisonTeam = false;
- 
+
   List<int> _leaderOwnedTeamIds = [];
-  List<int> _memberTeamIds      = [];
+  List<int> _memberTeamIds = [];
   int? _currentUserId;
- 
+
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
- 
+
   static const _stageOrder = [
     'pmc_application',
     'stage1',
@@ -114,14 +155,14 @@ class _ProcessListPageState extends State<ProcessListPage>
     'stage3_1',
     'stage3_2',
   ];
- 
+
   static const _stageLabels = {
     'pmc_application': 'Stage 0',
-    'stage1'         : 'Stage 1',
-    'stage2'         : 'Stage 2',
-    'stage3'         : 'Stage 3',
-    'stage3_1'       : 'Stage 3.1',
-    'stage3_2'       : 'Stage 3.2',
+    'stage1': 'Stage 1',
+    'stage2': 'Stage 2',
+    'stage3': 'Stage 3',
+    'stage3_1': 'Stage 3.1',
+    'stage3_2': 'Stage 3.2',
   };
 
   static const _stageIcons = {
@@ -141,26 +182,38 @@ class _ProcessListPageState extends State<ProcessListPage>
     'stage3_1': Color(0xFF8B5CF6),
     'stage3_2': Color(0xFFEF4444),
   };
- 
+
   List<_ExtraTab> _extraTabs = [];
- 
+
   bool _roleIsAdmin(String role) => role == _Roles.admin;
- 
+
   bool _roleIsTeamLeader(String role) =>
       role == _Roles.teamLeader ||
-      role == _Roles.leader     ||
+      role == _Roles.leader ||
       role == _Roles.teamLeader2;
+
+  bool _canAssignProcess(ProcessListItemModel p) {
+    if (_isAdmin) return true;
+    if (!_isTeamLeader) return false;
+
+    final teamId = p.workingTeamId;
+    if (teamId == null) return true;
+
+    // If the backend cannot return owned team ids for this team-leader role,
+    // keep the Stage 3.2 assign action available for tasks they can already see.
+    return _leaderOwnedTeamIds.isEmpty || _leaderOwnedTeamIds.contains(teamId);
+  }
 
   Color _accentColorForStage(String stageKey) =>
       _stageAccentColors[stageKey] ?? AppColors.primaryGreen;
 
   IconData _iconForStage(String stageKey) =>
       _stageIcons[stageKey] ?? Icons.layers_outlined;
- 
+
   // ─────────────────────────────────────────────────────────────────────────
   // Lifecycle
   // ─────────────────────────────────────────────────────────────────────────
- 
+
   @override
   void initState() {
     super.initState();
@@ -168,7 +221,7 @@ class _ProcessListPageState extends State<ProcessListPage>
     _initStage3SubTabController();
     _loadProcesses(initial: true);
   }
- 
+
   @override
   void dispose() {
     _tabController?.dispose();
@@ -177,7 +230,7 @@ class _ProcessListPageState extends State<ProcessListPage>
     _searchController.dispose();
     super.dispose();
   }
- 
+
   void _initStage0SubTabController() {
     _stage0SubTabController?.dispose();
     _stage0SubTabController = TabController(
@@ -192,7 +245,7 @@ class _ProcessListPageState extends State<ProcessListPage>
       }
     });
   }
- 
+
   void _initStage3SubTabController() {
     _stage3SubTabController?.dispose();
     _stage3SubTabController = TabController(
@@ -207,7 +260,7 @@ class _ProcessListPageState extends State<ProcessListPage>
       }
     });
   }
- 
+
   void _rebuildTabControllerIfNeeded(int totalTabCount) {
     final len = totalTabCount < 1 ? 1 : totalTabCount;
     if (_tabController != null && _tabController!.length == len) {
@@ -229,50 +282,55 @@ class _ProcessListPageState extends State<ProcessListPage>
     _tabController = nc;
     old?.dispose();
   }
- 
+
   // ─────────────────────────────────────────────────────────────────────────
   // Core data-load
   // ─────────────────────────────────────────────────────────────────────────
- 
-  Future<void> _loadProcesses({bool initial = false, bool silent = false}) async {
+
+  Future<void> _loadProcesses(
+      {bool initial = false, bool silent = false}) async {
     if (!mounted) return;
     if (silent) {
       setState(() => _isRefreshing = true);
     } else {
-      setState(() { _isLoading = true; _errorMessage = null; });
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
     }
- 
+
     try {
-      final rawRole = (await AuthStorageService.getUserRole() ?? '').trim().toLowerCase();
-      final isAdmin      = _roleIsAdmin(rawRole);
+      final rawRole =
+          (await AuthStorageService.getUserRole() ?? '').trim().toLowerCase();
+      final isAdmin = _roleIsAdmin(rawRole);
       final isTeamLeader = !isAdmin && _roleIsTeamLeader(rawRole);
-      final isRegular    = !isAdmin && !isTeamLeader;
- 
+      final isRegular = !isAdmin && !isTeamLeader;
+
       final currentUserId = await AuthStorageService.getUserId();
- 
+
       List<Map<String, dynamic>> allTeams = [];
       try {
         allTeams = await ApiService.fetchTeamsAndMembers();
       } catch (_) {}
- 
+
       List<int> leaderOwnedTeamIds = [];
       if (isTeamLeader && currentUserId != null) {
         try {
           leaderOwnedTeamIds = await ApiService.fetchLeaderOwnedTeamIds();
         } catch (_) {}
- 
+
         if (leaderOwnedTeamIds.isEmpty && allTeams.isNotEmpty) {
           for (final team in allTeams) {
             final teamId = int.tryParse(team['id']?.toString() ?? '');
             if (teamId == null) continue;
- 
+
             final rawLeaderId = team['team_leader_id'];
             final leaderIds = _parseIdList(rawLeaderId);
             if (leaderIds.contains(currentUserId)) {
               leaderOwnedTeamIds.add(teamId);
               continue;
             }
- 
+
             final members = team['members'];
             if (members is List) {
               final isInTeam = members.any((m) {
@@ -285,16 +343,16 @@ class _ProcessListPageState extends State<ProcessListPage>
             }
           }
         }
- 
+
         debugPrint('LEADER teamIds=$leaderOwnedTeamIds userId=$currentUserId');
       }
- 
+
       List<int> memberTeamIds = [];
       if (isRegular && currentUserId != null) {
         for (final team in allTeams) {
           final teamId = int.tryParse(team['id']?.toString() ?? '');
           if (teamId == null) continue;
- 
+
           final rawMemberIds = team['member_ids'] ?? team['members'];
           if (rawMemberIds is List) {
             final isMember = rawMemberIds.any((m) {
@@ -310,25 +368,24 @@ class _ProcessListPageState extends State<ProcessListPage>
         }
         debugPrint('MEMBER teamIds=$memberTeamIds userId=$currentUserId');
       }
- 
+
       final raw = await ApiService.fetchProjectProcesses(widget.projectId);
       if (!mounted) return;
- 
+
       final allProcesses =
           raw.map((item) => ProcessListItemModel.fromJson(item)).toList();
- 
+
       for (final p in allProcesses) {
         debugPrint('PROCESS => stage=${p.stage}, '
             'name=${p.processName}, teamId=${p.workingTeamId}, '
             'assignUser=${p.assignUser}, status=${p.status}');
       }
- 
+
       // ── Role-based process visibility ──────────────────────────────────
       List<ProcessListItemModel> visibleProcesses;
- 
+
       if (isAdmin) {
         visibleProcesses = allProcesses;
- 
       } else if (isTeamLeader) {
         if (leaderOwnedTeamIds.isEmpty) {
           debugPrint('LEADER: no team IDs resolved → showing all processes');
@@ -339,7 +396,6 @@ class _ProcessListPageState extends State<ProcessListPage>
             return teamId == null || leaderOwnedTeamIds.contains(teamId);
           }).toList();
         }
- 
       } else {
         if (currentUserId != null) {
           visibleProcesses = allProcesses.where((p) {
@@ -348,35 +404,34 @@ class _ProcessListPageState extends State<ProcessListPage>
             if (teamId != null && memberTeamIds.contains(teamId)) return true;
             return false;
           }).toList();
- 
+
           debugPrint('MEMBER: visible=${visibleProcesses.length} '
               'of ${allProcesses.length} total');
         } else {
           visibleProcesses = [];
         }
       }
- 
+
       // ── Group by stage ─────────────────────────────────────────────────
       final Map<String, List<ProcessListItemModel>> grouped = {};
       for (final process in visibleProcesses) {
         grouped.putIfAbsent(process.stage, () => []).add(process);
       }
- 
+
       // ── Stage-tab visibility ───────────────────────────────────────────
       final stages = <ProcessStageModel>[];
- 
+
       for (final key in _stageOrder) {
         final list = grouped[key] ?? <ProcessListItemModel>[];
- 
-        final alwaysShow =
-            key == 'pmc_application' ||
-            key == 'stage1'          ||
-            key == 'stage2'          ||
-            key == 'stage3_1'        ||
+
+        final alwaysShow = key == 'pmc_application' ||
+            key == 'stage1' ||
+            key == 'stage2' ||
+            key == 'stage3_1' ||
             key == 'stage3_2';
- 
+
         final isStage3AdminOnly = key == 'stage3';
- 
+
         bool shouldShow;
         if (isAdmin) {
           shouldShow = true;
@@ -387,83 +442,85 @@ class _ProcessListPageState extends State<ProcessListPage>
         } else {
           shouldShow = list.isNotEmpty;
         }
- 
+
         if (shouldShow) {
           stages.add(ProcessStageModel(
-            stageKey  : key,
+            stageKey: key,
             stageLabel: _stageLabels[key] ?? key,
-            processes : list,
+            processes: list,
           ));
         }
       }
- 
+
       // ── Extra tabs ────────────────────────────────────────────────────
       // CHANGE: Minutes of Meeting is visible to ALL roles.
       //         CC Progress, Layout Approval, OC Progress are ADMIN ONLY.
       //         Team leaders and regular members can NO LONGER see those tabs.
-      final extraTabs = <_ExtraTab>[
-        _ExtraTab(
-          key  : 'mom',
-          label: 'Minutes of Meeting',
-          icon : Icons.calendar_today_outlined,
-        ),
-      ];
- 
-      // Only admins see CC Progress, Layout Approval, OC Progress
-      if (isAdmin) {
-        extraTabs.addAll([
-          _ExtraTab(
-            key  : 'cc_progress',
-            label: 'CC Progress',
-            icon : Icons.construction_outlined,
-          ),
-          _ExtraTab(
-            key  : 'layout_approval',
-            label: 'Layout Approval',
-            icon : Icons.layers_outlined,
-          ),
-          _ExtraTab(
-            key  : 'oc_progress',
-            label: 'OC Progress',
-            icon : Icons.check_circle_outline,
-          ),
-        ]);
-      }
- 
+      final extraTabs = <_ExtraTab>[];
+
+// Minutes of Meeting: Admin only (hidden from Team Leader)
+if (isAdmin) {
+  extraTabs.add(_ExtraTab(
+    key: 'mom',
+    label: 'Minutes of Meeting',
+    icon: Icons.calendar_today_outlined,
+  ));
+}
+
+// CC Progress, Layout Approval, OC Progress: Admin AND Team Leader
+if (isAdmin || isTeamLeader) {
+  extraTabs.addAll([
+    _ExtraTab(
+      key: 'cc_progress',
+      label: 'CC Progress',
+      icon: Icons.construction_outlined,
+    ),
+    _ExtraTab(
+      key: 'layout_approval',
+      label: 'Layout Approval',
+      icon: Icons.layers_outlined,
+    ),
+    _ExtraTab(
+      key: 'oc_progress',
+      label: 'OC Progress',
+      icon: Icons.check_circle_outline,
+    ),
+  ]);
+}
+
       if (!mounted) return;
- 
+
       final totalTabs = stages.length + extraTabs.length;
       if (_currentTabIndex >= totalTabs && totalTabs > 0) {
         _currentTabIndex = 0;
       }
       _rebuildTabControllerIfNeeded(totalTabs);
- 
+
       setState(() {
-        _isAdmin                   = isAdmin;
-        _isTeamLeader              = isTeamLeader;
-        _isMunicipalOrLiaisonTeam  = isAdmin || isTeamLeader;
-        _leaderOwnedTeamIds        = leaderOwnedTeamIds;
-        _memberTeamIds             = memberTeamIds;
-        _currentUserId             = currentUserId;
-        _stages                    = stages;
-        _extraTabs                 = extraTabs;
-        _isLoading                 = false;
-        _isRefreshing              = false;
-        _errorMessage              = null;
+        _isAdmin = isAdmin;
+        _isTeamLeader = isTeamLeader;
+        _isMunicipalOrLiaisonTeam = isAdmin || isTeamLeader;
+        _leaderOwnedTeamIds = leaderOwnedTeamIds;
+        _memberTeamIds = memberTeamIds;
+        _currentUserId = currentUserId;
+        _stages = stages;
+        _extraTabs = extraTabs;
+        _isLoading = false;
+        _isRefreshing = false;
+        _errorMessage = null;
       });
- 
     } catch (e) {
       if (!mounted) return;
       setState(() {
         if (!silent) {
           _errorMessage = e is ApiException ? e.message : e.toString();
         }
-        _isLoading    = false;
+        _isLoading = false;
         _isRefreshing = false;
       });
     }
   }
- 
+
   List<int> _parseIdList(dynamic raw) {
     if (raw == null) return [];
     if (raw is int) return [raw];
@@ -490,11 +547,11 @@ class _ProcessListPageState extends State<ProcessListPage>
     }
     return [];
   }
- 
+
   Future<void> _onActionComplete() async => _loadProcesses(silent: true);
- 
+
   // ── Colour helpers ─────────────────────────────────────────────────────────
- 
+
   Color _resolveTeamColor(String? teamName, String? teamColor) {
     if (teamColor != null && teamColor.isNotEmpty) {
       try {
@@ -505,18 +562,23 @@ class _ProcessListPageState extends State<ProcessListPage>
     }
     if (teamName == null || teamName.isEmpty) return const Color(0xFF94A3B8);
     final n = teamName.toLowerCase();
-    if (n.contains('legal'))                               return const Color(0xFF22C55E);
-    if (n.contains('liaison') || n.contains('liasoning')) return const Color(0xFFEF4444);
-    if (n.contains('construction'))                        return const Color(0xFFF59E0B);
+    if (n.contains('legal')) return const Color(0xFF22C55E);
+    if (n.contains('liaison') || n.contains('liasoning'))
+      return const Color(0xFFEF4444);
+    if (n.contains('construction')) return const Color(0xFFF59E0B);
     const colors = [
-      Color(0xFF3B82F6), Color(0xFF8B5CF6), Color(0xFFEC4899),
-      Color(0xFF14B8A6), Color(0xFFF97316), Color(0xFF06B6D4),
+      Color(0xFF3B82F6),
+      Color(0xFF8B5CF6),
+      Color(0xFFEC4899),
+      Color(0xFF14B8A6),
+      Color(0xFFF97316),
+      Color(0xFF06B6D4),
     ];
     return colors[teamName.hashCode.abs() % colors.length];
   }
- 
+
   // ── Badge / chip widgets ───────────────────────────────────────────────────
- 
+
   Widget _buildTeamPill(String teamName, String? teamColor) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
@@ -526,44 +588,50 @@ class _ProcessListPageState extends State<ProcessListPage>
         child: Text(
           teamName.toUpperCase(),
           style: const TextStyle(
-              color: Colors.white, fontSize: 11,
-              fontWeight: FontWeight.w700, letterSpacing: 0.4),
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4),
         ),
       );
- 
+
   Widget _deadlineBadge(ProcessListItemModel p) {
     if (p.isNotApplicable) return _chip('N/A', const Color(0xFF94A3B8));
-    if (!p.isAssigned)     return _chip('—',   const Color(0xFFCBD5E1));
+    if (!p.isAssigned) return _chip('—', const Color(0xFFCBD5E1));
     final d = p.deadlineDays;
-    if (d == null)  return _chip('No Deadline',          const Color(0xFF94A3B8));
-    if (d > 0)      return _chip('$d days left',         const Color(0xFFF59E0B));
-    if (d == 0)     return _chip('Due Today',            const Color(0xFFEF4444));
-    return              _chip('${d.abs()} days overdue', const Color(0xFFDC2626));
+    if (d == null) return _chip('No Deadline', const Color(0xFF94A3B8));
+    if (d > 0) return _chip('$d days left', const Color(0xFFF59E0B));
+    if (d == 0) return _chip('Due Today', const Color(0xFFEF4444));
+    return _chip('${d.abs()} days overdue', const Color(0xFFDC2626));
   }
- 
+
   Widget _statusBadge(ProcessListItemModel p) {
-    if (p.isNotApplicable) return _chip('Not Applicable', const Color(0xFF94A3B8));
+    if (p.isNotApplicable)
+      return _chip('Not Applicable', const Color(0xFF94A3B8));
     final color = switch (p.status) {
-      'completed'      => const Color(0xFF22C55E),
-      'assigned'       => const Color(0xFFF59E0B),
-      'not_started'    => const Color(0xFF94A3B8),
+      'completed' => const Color(0xFF22C55E),
+      'assigned' => const Color(0xFFF59E0B),
+      'not_started' => const Color(0xFF94A3B8),
       'not_applicable' => const Color(0xFF94A3B8),
-      _                => const Color(0xFFEF4444),
+      _ => const Color(0xFFEF4444),
     };
     return _chip(p.statusLabel, color);
   }
- 
+
   Widget _chip(String label, Color color) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
+        decoration:
+            BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
         child: Text(label,
             style: const TextStyle(
-                color: Colors.white, fontSize: 10,
-                fontWeight: FontWeight.w600, letterSpacing: 0.2)),
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.2)),
       );
- 
+
   // ── Assign button ──────────────────────────────────────────────────────────
- 
+
   Widget _assignButton(ProcessListItemModel p) {
     if (p.isNotApplicable) return _chip('N/A', const Color(0xFF94A3B8));
     if (p.isAssigned && (p.assignUserName?.isNotEmpty ?? false)) {
@@ -573,23 +641,21 @@ class _ProcessListPageState extends State<ProcessListPage>
         Flexible(
           child: Text(p.assignUserName!,
               style: const TextStyle(
-                  fontSize: 12, color: Color(0xFF1E293B),
+                  fontSize: 12,
+                  color: Color(0xFF1E293B),
                   fontWeight: FontWeight.w500),
               overflow: TextOverflow.ellipsis),
         ),
       ]);
     }
- 
-    final canAssign = _isAdmin ||
-        (_isTeamLeader &&
-            (p.workingTeamId == null ||
-                _leaderOwnedTeamIds.contains(p.workingTeamId)));
- 
+
+    final canAssign = _canAssignProcess(p);
+
     if (!canAssign) {
       return const Text('—',
           style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)));
     }
- 
+
     return GestureDetector(
       onTap: () => _showAssignDialog(p),
       child: Container(
@@ -599,25 +665,27 @@ class _ProcessListPageState extends State<ProcessListPage>
             borderRadius: BorderRadius.circular(5)),
         child: const Text('Assign',
             style: TextStyle(
-                color: Colors.white, fontSize: 12,
+                color: Colors.white,
+                fontSize: 12,
                 fontWeight: FontWeight.w700)),
       ),
     );
   }
- 
+
   // ── Action buttons ─────────────────────────────────────────────────────────
- 
+
   Widget _actionButtons(ProcessListItemModel p) {
     if (p.isNotApplicable) return _chip('N/A', const Color(0xFF94A3B8));
- 
+
     final int? uid = _currentUserId;
-    final bool isAssignedUser =
-        uid != null && p.isAssignedToCurrentUser(uid);
-    final bool canViewFile = p.hasFile && (_isAdmin || _isTeamLeader || isAssignedUser);
- 
+    final bool isAssignedUser = uid != null && p.isAssignedToCurrentUser(uid);
+    final bool canUpload = isAssignedUser && !_isAdmin && !_isTeamLeader;
+    final bool canViewFile =
+        p.hasFile && (_isAdmin || _isTeamLeader || isAssignedUser);
+
     final btns = <Widget>[];
- 
-    if (isAssignedUser) {
+
+    if (canUpload) {
       if (p.hasFile) {
         btns.add(_actionBtn(
           label: 'Reupload',
@@ -634,7 +702,7 @@ class _ProcessListPageState extends State<ProcessListPage>
         ));
       }
     }
- 
+
     if (canViewFile) {
       btns.add(_actionBtn(
         label: 'View File',
@@ -643,7 +711,7 @@ class _ProcessListPageState extends State<ProcessListPage>
         onTap: () => _openFile(p),
       ));
     }
- 
+
     if (_isAdmin || _isTeamLeader) {
       btns.add(_actionBtn(
         label: 'Email',
@@ -652,20 +720,22 @@ class _ProcessListPageState extends State<ProcessListPage>
         onTap: () => _showEmailDialog(p),
       ));
     }
- 
+
     if (btns.isEmpty) {
       if (!p.isAssigned) {
         return const Text('Not yet assigned',
-            style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8),
+            style: TextStyle(
+                fontSize: 11,
+                color: Color(0xFF94A3B8),
                 fontStyle: FontStyle.italic));
       }
       return const Text('—',
           style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)));
     }
- 
+
     return Wrap(spacing: 6, runSpacing: 6, children: btns);
   }
- 
+
   Widget _actionBtn({
     required String label,
     required Color color,
@@ -683,7 +753,8 @@ class _ProcessListPageState extends State<ProcessListPage>
             const SizedBox(width: 4),
             Text(label,
                 style: const TextStyle(
-                    color: Colors.white, fontSize: 11,
+                    color: Colors.white,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600)),
           ]),
         ),
@@ -801,7 +872,8 @@ class _ProcessListPageState extends State<ProcessListPage>
         ),
         Padding(
           padding: const EdgeInsets.all(14),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _labeledSection(
               label: 'Team Name',
               child: hasTeam
@@ -1034,7 +1106,7 @@ class _ProcessListPageState extends State<ProcessListPage>
           ),
         ]),
       );
- 
+
   Widget _buildProcessCards(List<ProcessListItemModel> processes) {
     if (processes.isEmpty) {
       return Padding(
@@ -1042,8 +1114,7 @@ class _ProcessListPageState extends State<ProcessListPage>
         child: Center(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.search_off_rounded,
-                size: 40,
-                color: AppColors.primaryGreen.withValues(alpha: 0.3)),
+                size: 40, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
             const SizedBox(height: 12),
             Text(
               _searchQuery.isEmpty
@@ -1069,19 +1140,22 @@ class _ProcessListPageState extends State<ProcessListPage>
       }
       children.add(_processCard(p, idx++));
     }
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+    return Column(
+        crossAxisAlignment: CrossAxisAlignment.start, children: children);
   }
- 
+
   // ─────────────────────────────────────────────────────────────────────────
   // Stage 0
   // ─────────────────────────────────────────────────────────────────────────
- 
+
   ProcessStageModel? get _stage0 {
     try {
       return _stages.firstWhere((s) => s.stageKey == 'pmc_application');
-    } catch (_) { return null; }
+    } catch (_) {
+      return null;
+    }
   }
- 
+
   Widget _buildStage0Tab() {
     final ctrl = _stage0SubTabController;
     if (ctrl == null) return const SizedBox.shrink();
@@ -1099,19 +1173,27 @@ class _ProcessListPageState extends State<ProcessListPage>
           unselectedLabelColor: const Color(0xFF94A3B8),
           indicatorColor: AppColors.primaryGreen,
           indicatorWeight: 2,
-          labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-          unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
+          labelStyle:
+              const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+          unselectedLabelStyle:
+              const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
           tabs: const [
-            Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.info_outline, size: 14), SizedBox(width: 5),
+            Tab(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.info_outline, size: 14),
+              SizedBox(width: 5),
               Text('Project Info'),
             ])),
-            Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.description_outlined, size: 14), SizedBox(width: 5),
+            Tab(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.description_outlined, size: 14),
+              SizedBox(width: 5),
               Text('PMC Application'),
             ])),
-            Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.person_pin_outlined, size: 14), SizedBox(width: 5),
+            Tab(
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.person_pin_outlined, size: 14),
+              SizedBox(width: 5),
               Text('PMC Appointment'),
             ])),
           ],
@@ -1126,16 +1208,17 @@ class _ProcessListPageState extends State<ProcessListPage>
       ),
     ]);
   }
- 
+
   Widget _buildProjectInfoSubTab() => _ProjectInfoForm(
         projectId: widget.projectId,
         isAdmin: _isAdmin,
         onSaved: _onActionComplete,
       );
- 
+
   Widget _buildPmcApplicationSubTab() {
     final stage = _stage0;
-    if (stage == null) return _emptyProcessState('No PMC Application processes found.');
+    if (stage == null)
+      return _emptyProcessState('No PMC Application processes found.');
     final filtered = _searchQuery.isEmpty
         ? stage.processes
         : stage.processes
@@ -1153,7 +1236,7 @@ class _ProcessListPageState extends State<ProcessListPage>
       ]),
     );
   }
- 
+
   Widget _buildPmcAppointmentSubTab() => Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -1164,7 +1247,8 @@ class _ProcessListPageState extends State<ProcessListPage>
             const SizedBox(height: 16),
             const Text('PMC Appointment',
                 style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                     color: Color(0xFF1E293B))),
             const SizedBox(height: 8),
             const Text(
@@ -1175,26 +1259,62 @@ class _ProcessListPageState extends State<ProcessListPage>
           ]),
         ),
       );
- 
+
   // ─────────────────────────────────────────────────────────────────────────
   // Stage 3
   // ─────────────────────────────────────────────────────────────────────────
- 
+
   static const _stage3SubTabDefs = [
-    _Stage3SubTabDef(key: Stage3SubTab.dailyProgress,         label: 'Daily Progress Report',    icon: Icons.insert_drive_file_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.cementChecklist,       label: 'Cement Checklist',         icon: Icons.assignment_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.steelChecklist,        label: 'Steel Checklist',          icon: Icons.assignment_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.excavationChecklist,   label: 'Excavation Checklist',     icon: Icons.assignment_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.shutteringChecklist,   label: 'Shuttering Checklist',     icon: Icons.assignment_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.concretingChecklist,   label: 'Concreting Checklist',     icon: Icons.assignment_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.siteInstruction,       label: 'Site Instruction',         icon: Icons.menu_book_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.reinforcementChecklist,label: 'Reinforcement Checklist',  icon: Icons.settings_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.concreteCubeResults,   label: 'Concrete Cube Results',    icon: Icons.bar_chart_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.approvalForm,          label: 'Approval Form',            icon: Icons.fact_check_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.architectureChecklist, label: 'Architecture Checklist',   icon: Icons.apartment_outlined),
-    _Stage3SubTabDef(key: Stage3SubTab.concretePourCard,      label: 'Concrete Pour Card',       icon: Icons.credit_card_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.dailyProgress,
+        label: 'Daily Progress Report',
+        icon: Icons.insert_drive_file_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.cementChecklist,
+        label: 'Cement Checklist',
+        icon: Icons.assignment_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.steelChecklist,
+        label: 'Steel Checklist',
+        icon: Icons.assignment_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.excavationChecklist,
+        label: 'Excavation Checklist',
+        icon: Icons.assignment_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.shutteringChecklist,
+        label: 'Shuttering Checklist',
+        icon: Icons.assignment_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.concretingChecklist,
+        label: 'Concreting Checklist',
+        icon: Icons.assignment_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.siteInstruction,
+        label: 'Site Instruction',
+        icon: Icons.menu_book_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.reinforcementChecklist,
+        label: 'Reinforcement Checklist',
+        icon: Icons.settings_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.concreteCubeResults,
+        label: 'Concrete Cube Results',
+        icon: Icons.bar_chart_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.approvalForm,
+        label: 'Approval Form',
+        icon: Icons.fact_check_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.architectureChecklist,
+        label: 'Architecture Checklist',
+        icon: Icons.apartment_outlined),
+    _Stage3SubTabDef(
+        key: Stage3SubTab.concretePourCard,
+        label: 'Concrete Pour Card',
+        icon: Icons.credit_card_outlined),
   ];
- 
+
   Widget _buildStage3Tab() {
     final ctrl = _stage3SubTabController;
     if (ctrl == null) return const SizedBox.shrink();
@@ -1212,8 +1332,10 @@ class _ProcessListPageState extends State<ProcessListPage>
           unselectedLabelColor: const Color(0xFF94A3B8),
           indicatorColor: AppColors.primaryGreen,
           indicatorWeight: 2,
-          labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-          unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
+          labelStyle:
+              const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+          unselectedLabelStyle:
+              const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
           tabs: _stage3SubTabDefs
               .map((d) => Tab(
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1235,7 +1357,7 @@ class _ProcessListPageState extends State<ProcessListPage>
       ),
     ]);
   }
- 
+
   Widget _buildStage3SubTabContent(Stage3SubTab tab) {
     switch (tab) {
       case Stage3SubTab.dailyProgress:
@@ -1275,7 +1397,7 @@ class _ProcessListPageState extends State<ProcessListPage>
             projectId: widget.projectId, projectName: widget.projectName);
     }
   }
- 
+
   Widget _buildDailyProgressContent() => SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1291,35 +1413,40 @@ class _ProcessListPageState extends State<ProcessListPage>
               boxShadow: [
                 BoxShadow(
                     color: Colors.black.withValues(alpha: 0.03),
-                    blurRadius: 6, offset: const Offset(0, 2))
+                    blurRadius: 6,
+                    offset: const Offset(0, 2))
               ],
             ),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
                 Icon(Icons.insert_drive_file_outlined,
                     size: 18, color: AppColors.primaryGreen),
                 const SizedBox(width: 8),
                 Text('Re-Execution Process',
                     style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
                         color: AppColors.primaryGreen)),
               ]),
               const SizedBox(height: 12),
               const Text('Daily Progress Report',
                   style: TextStyle(
-                      fontSize: 13, color: Color(0xFF64748B),
+                      fontSize: 13,
+                      color: Color(0xFF64748B),
                       fontWeight: FontWeight.w500)),
               const SizedBox(height: 12),
               GestureDetector(
-                onTap: () => Navigator.push(context,
+                onTap: () => Navigator.push(
+                    context,
                     MaterialPageRoute(
                       builder: (_) => ReExecutionListPage(
                           projectId: widget.projectId,
                           projectName: widget.projectName),
                     )),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: BoxDecoration(
                       color: AppColors.primaryGreen,
                       borderRadius: BorderRadius.circular(8)),
@@ -1328,7 +1455,8 @@ class _ProcessListPageState extends State<ProcessListPage>
                     SizedBox(width: 6),
                     Text('Open Daily Progress Reports',
                         style: TextStyle(
-                            color: Colors.white, fontSize: 13,
+                            color: Colors.white,
+                            fontSize: 13,
                             fontWeight: FontWeight.w600)),
                   ]),
                 ),
@@ -1337,35 +1465,37 @@ class _ProcessListPageState extends State<ProcessListPage>
           ),
         ]),
       );
- 
+
   // ─────────────────────────────────────────────────────────────────────────
   // Stage 3.1 — Drawing Requests
   // ─────────────────────────────────────────────────────────────────────────
- 
+
   Widget _buildStage3_1Tab() => _DrawingRequestsTab(
         projectId: widget.projectId,
         isAdmin: _isAdmin,
         isTeamLeader: _isTeamLeader,
       );
- 
+
   // ─────────────────────────────────────────────────────────────────────────
   // Stage 3.2 — Report Tasks
   // ─────────────────────────────────────────────────────────────────────────
- 
+
   Widget _buildStage3_2Tab() {
     ProcessStageModel? stage32;
     try {
       stage32 = _stages.firstWhere((s) => s.stageKey == 'stage3_2');
-    } catch (_) { stage32 = null; }
- 
+    } catch (_) {
+      stage32 = null;
+    }
+
     if (!_isAdmin && !_isTeamLeader) {
       return _buildMemberStage32View(stage32);
     }
- 
+
     if (stage32 == null) {
       return _emptyProcessState('No Stage 3.2 processes found.');
     }
- 
+
     final filtered = _searchQuery.isEmpty
         ? stage32.processes
         : stage32.processes
@@ -1373,7 +1503,7 @@ class _ProcessListPageState extends State<ProcessListPage>
                 .toLowerCase()
                 .contains(_searchQuery.toLowerCase()))
             .toList();
- 
+
     return LayoutBuilder(builder: (context, constraints) {
       final isMobile = constraints.maxWidth < 700;
       return RefreshIndicator(
@@ -1393,12 +1523,14 @@ class _ProcessListPageState extends State<ProcessListPage>
                       decoration: BoxDecoration(
                           color: AppColors.primaryGreen,
                           borderRadius: BorderRadius.circular(8)),
-                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      child:
+                          const Row(mainAxisSize: MainAxisSize.min, children: [
                         Icon(Icons.add, size: 16, color: Colors.white),
                         SizedBox(width: 6),
                         Text('Create Report Task',
                             style: TextStyle(
-                                color: Colors.white, fontSize: 13,
+                                color: Colors.white,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w600)),
                       ]),
                     ),
@@ -1428,13 +1560,14 @@ class _ProcessListPageState extends State<ProcessListPage>
       );
     });
   }
- 
+
   Widget _buildMemberStage32View(ProcessStageModel? stage32) {
     final uid = _currentUserId;
     final myTasks = stage32?.processes.where((p) {
-      return uid != null && p.isAssignedToCurrentUser(uid);
-    }).toList() ?? [];
- 
+          return uid != null && p.isAssignedToCurrentUser(uid);
+        }).toList() ??
+        [];
+
     return RefreshIndicator(
       onRefresh: () => _loadProcesses(silent: false),
       color: AppColors.primaryGreen,
@@ -1454,26 +1587,27 @@ class _ProcessListPageState extends State<ProcessListPage>
                   color: AppColors.primaryGreen, size: 20),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                  Text('My Assigned Tasks',
-                      style: TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w700,
-                          color: AppColors.primaryGreen)),
-                  const SizedBox(height: 2),
-                  Text(
-                    myTasks.isEmpty
-                        ? 'No tasks have been assigned to you yet.'
-                        : '${myTasks.length} task${myTasks.length == 1 ? '' : 's'} assigned to you',
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF475569)),
-                  ),
-                ]),
+                      Text('My Assigned Tasks',
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.primaryGreen)),
+                      const SizedBox(height: 2),
+                      Text(
+                        myTasks.isEmpty
+                            ? 'No tasks have been assigned to you yet.'
+                            : '${myTasks.length} task${myTasks.length == 1 ? '' : 's'} assigned to you',
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF475569)),
+                      ),
+                    ]),
               ),
             ]),
           ),
         ),
- 
         if (myTasks.isEmpty)
           SliverToBoxAdapter(
             child: Center(
@@ -1500,16 +1634,15 @@ class _ProcessListPageState extends State<ProcessListPage>
               childCount: myTasks.length,
             ),
           ),
- 
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
       ]),
     );
   }
- 
+
   Widget _buildMemberTaskCard(ProcessListItemModel p, int index) {
     final isCompleted = p.isCompleted;
     final hasFile = p.hasFile;
- 
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       decoration: BoxDecoration(
@@ -1539,7 +1672,8 @@ class _ProcessListPageState extends State<ProcessListPage>
           ),
           child: Row(children: [
             Container(
-              width: 32, height: 32,
+              width: 32,
+              height: 32,
               decoration: BoxDecoration(
                 color: isCompleted
                     ? const Color(0xFF22C55E)
@@ -1549,23 +1683,25 @@ class _ProcessListPageState extends State<ProcessListPage>
               alignment: Alignment.center,
               child: Icon(
                 isCompleted ? Icons.check_rounded : Icons.assignment_outlined,
-                color: Colors.white, size: 16,
+                color: Colors.white,
+                size: 16,
               ),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(p.processName,
                   style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
                       color: Color(0xFF1E293B))),
             ),
             _statusBadge(p),
           ]),
         ),
- 
         Padding(
           padding: const EdgeInsets.all(14),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             if (p.deadline != null || p.deadlineDays != null) ...[
               Row(children: [
                 const Icon(Icons.schedule_outlined,
@@ -1575,7 +1711,6 @@ class _ProcessListPageState extends State<ProcessListPage>
               ]),
               const SizedBox(height: 12),
             ],
- 
             if (isCompleted) ...[
               Row(children: [
                 const Icon(Icons.check_circle_outline,
@@ -1583,7 +1718,8 @@ class _ProcessListPageState extends State<ProcessListPage>
                 const SizedBox(width: 6),
                 const Text('Task completed',
                     style: TextStyle(
-                        fontSize: 13, color: Color(0xFF22C55E),
+                        fontSize: 13,
+                        color: Color(0xFF22C55E),
                         fontWeight: FontWeight.w600)),
               ]),
               if (hasFile) ...[
@@ -1630,14 +1766,12 @@ class _ProcessListPageState extends State<ProcessListPage>
                   border: Border.all(color: const Color(0xFFFED7AA)),
                 ),
                 child: const Row(children: [
-                  Icon(Icons.info_outline,
-                      size: 14, color: Color(0xFFF97316)),
+                  Icon(Icons.info_outline, size: 14, color: Color(0xFFF97316)),
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       'Upload your completed work to mark this task done.',
-                      style: TextStyle(
-                          fontSize: 12, color: Color(0xFF92400E)),
+                      style: TextStyle(fontSize: 12, color: Color(0xFF92400E)),
                     ),
                   ),
                 ]),
@@ -1649,8 +1783,8 @@ class _ProcessListPageState extends State<ProcessListPage>
                   onPressed: () => _showUploadDialog(p),
                   icon: const Icon(Icons.upload_file_outlined, size: 16),
                   label: const Text('Upload Completed Work',
-                      style: TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w700)),
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     foregroundColor: Colors.white,
@@ -1667,14 +1801,11 @@ class _ProcessListPageState extends State<ProcessListPage>
       ]),
     );
   }
- 
+
   Widget _buildStage32MobileCard(ProcessListItemModel p, int index) {
     final hasTeam = p.teamName != null && p.teamName!.isNotEmpty;
-    final canAssign = _isAdmin ||
-        (_isTeamLeader &&
-            (p.workingTeamId == null ||
-                _leaderOwnedTeamIds.contains(p.workingTeamId)));
- 
+    final canAssign = _canAssignProcess(p);
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       padding: const EdgeInsets.all(14),
@@ -1682,34 +1813,44 @@ class _ProcessListPageState extends State<ProcessListPage>
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0xFFE2E8F0)),
-        boxShadow: [BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 4, offset: const Offset(0, 1))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 4,
+              offset: const Offset(0, 1))
+        ],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Container(
-            width: 26, height: 26,
+            width: 26,
+            height: 26,
             decoration: BoxDecoration(
                 color: const Color(0xFFF1F5F9),
                 borderRadius: BorderRadius.circular(6)),
             alignment: Alignment.center,
             child: Text('${index + 1}',
                 style: const TextStyle(
-                    fontSize: 11, fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
                     color: Color(0xFF64748B))),
           ),
           const SizedBox(width: 10),
-          Expanded(child: Text(p.processName,
-              style: const TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w700,
-                  color: Color(0xFF1E293B)))),
+          Expanded(
+              child: Text(p.processName,
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1E293B)))),
         ]),
         const SizedBox(height: 12),
         if (hasTeam) ...[
-          const Text('TEAM', style: TextStyle(
-              fontSize: 10, fontWeight: FontWeight.w700,
-              color: Color(0xFF94A3B8), letterSpacing: 0.5)),
+          const Text('TEAM',
+              style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF94A3B8),
+                  letterSpacing: 0.5)),
           const SizedBox(height: 5),
           _buildCompactTeamPill(p.teamName!, p.teamColor),
           const SizedBox(height: 12),
@@ -1721,7 +1862,8 @@ class _ProcessListPageState extends State<ProcessListPage>
               p.isAssigned && (p.assignUserName?.isNotEmpty ?? false)
                   ? Text(p.assignUserName!,
                       style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF1E293B),
+                          fontSize: 12,
+                          color: Color(0xFF1E293B),
                           fontWeight: FontWeight.w500),
                       overflow: TextOverflow.ellipsis)
                   : canAssign
@@ -1735,7 +1877,8 @@ class _ProcessListPageState extends State<ProcessListPage>
                                 borderRadius: BorderRadius.circular(6)),
                             child: const Text('Assign',
                                 style: TextStyle(
-                                    color: Colors.white, fontSize: 12,
+                                    color: Colors.white,
+                                    fontSize: 12,
                                     fontWeight: FontWeight.w700)),
                           ))
                       : const Text('—',
@@ -1747,26 +1890,41 @@ class _ProcessListPageState extends State<ProcessListPage>
           Expanded(child: _mobileInfoBlock('STATUS', _statusBadge(p))),
         ]),
         const SizedBox(height: 14),
-        const Text('ACTIONS', style: TextStyle(
-            fontSize: 10, fontWeight: FontWeight.w700,
-            color: Color(0xFF94A3B8), letterSpacing: 0.5)),
+        const Text('ACTIONS',
+            style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF94A3B8),
+                letterSpacing: 0.5)),
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 8, children: [
           if (p.hasFile) ...[
-            _mobileActionBtn(label: 'Reupload',
-                color: const Color(0xFFF59E0B),
-                icon: Icons.upload_rounded,
-                onTap: () => _showUploadDialog(p)),
-            _mobileActionBtn(label: 'View',
+            _mobileActionBtn(
+                label: 'View File',
                 color: const Color(0xFF3B82F6),
                 icon: Icons.insert_drive_file_outlined,
                 onTap: () => _openFile(p)),
           ] else
-            _mobileActionBtn(label: 'Upload',
-                color: const Color(0xFF3B82F6),
-                icon: Icons.upload_file_outlined,
-                onTap: () => _showUploadDialog(p)),
-          _mobileActionBtn(label: 'Email',
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.hourglass_empty_rounded,
+                    size: 13, color: Color(0xFF94A3B8)),
+                SizedBox(width: 5),
+                Text('Not Uploaded',
+                    style: TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500)),
+              ]),
+            ),
+          _mobileActionBtn(
+              label: 'Email',
               color: const Color(0xFF1E293B),
               icon: Icons.email_outlined,
               onTap: () => _showEmailDialog(p)),
@@ -1774,29 +1932,33 @@ class _ProcessListPageState extends State<ProcessListPage>
       ]),
     );
   }
- 
+
   Widget _mobileInfoBlock(String label, Widget child) =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(
-            fontSize: 10, fontWeight: FontWeight.w700,
-            color: Color(0xFF94A3B8), letterSpacing: 0.5)),
+        Text(label,
+            style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF94A3B8),
+                letterSpacing: 0.5)),
         const SizedBox(height: 6),
         child,
       ]);
- 
-  Widget _buildCompactTeamPill(String teamName, String? teamColor) =>
-      Container(
+
+  Widget _buildCompactTeamPill(String teamName, String? teamColor) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
             color: _resolveTeamColor(teamName, teamColor),
             borderRadius: BorderRadius.circular(20)),
         child: Text(teamName.toUpperCase(),
-            maxLines: 1, overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
-                color: Colors.white, fontSize: 10,
+                color: Colors.white,
+                fontSize: 10,
                 fontWeight: FontWeight.w700)),
       );
- 
+
   Widget _mobileActionBtn({
     required String label,
     required Color color,
@@ -1812,27 +1974,26 @@ class _ProcessListPageState extends State<ProcessListPage>
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(icon, size: 14, color: Colors.white),
             const SizedBox(width: 5),
-            Text(label, style: const TextStyle(
-                color: Colors.white, fontSize: 11,
-                fontWeight: FontWeight.w600)),
+            Text(label,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600)),
           ]),
         ),
       );
- 
+
   Widget _buildStage32Row(ProcessListItemModel p, int index) {
     final hasTeam = p.teamName != null && p.teamName!.isNotEmpty;
-    final canAssign = _isAdmin ||
-        (_isTeamLeader &&
-            (p.workingTeamId == null ||
-                _leaderOwnedTeamIds.contains(p.workingTeamId)));
- 
+    final canAssign = _canAssignProcess(p);
+
     final statusColor = switch (p.status) {
-      'completed'      => const Color(0xFF22C55E),
-      'assigned'       => const Color(0xFFF59E0B),
+      'completed' => const Color(0xFF22C55E),
+      'assigned' => const Color(0xFFF59E0B),
       'not_applicable' => const Color(0xFF94A3B8),
-      _                => const Color(0xFF94A3B8),
+      _ => const Color(0xFF94A3B8),
     };
- 
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1841,29 +2002,35 @@ class _ProcessListPageState extends State<ProcessListPage>
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFFE2E8F0))),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        SizedBox(width: 40,
+        SizedBox(
+            width: 40,
             child: Text('${index + 1}',
                 style: const TextStyle(
-                    fontSize: 12, color: Color(0xFF64748B),
+                    fontSize: 12,
+                    color: Color(0xFF64748B),
                     fontWeight: FontWeight.w600))),
-        Expanded(flex: 3,
+        Expanded(
+            flex: 3,
             child: Text(p.processName,
                 style: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                     color: Color(0xFF1E293B)),
                 overflow: TextOverflow.ellipsis)),
         const SizedBox(width: 8),
-        Expanded(flex: 3,
+        Expanded(
+            flex: 3,
             child: hasTeam
                 ? _buildCompactTeamPill(p.teamName!, p.teamColor)
                 : const Text('—',
                     style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12))),
         const SizedBox(width: 8),
-        Expanded(flex: 2,
+        Expanded(
+            flex: 2,
             child: p.isAssigned && p.assignUserName != null
                 ? Text(p.assignUserName!,
-                    style: const TextStyle(
-                        fontSize: 11, color: Color(0xFF1E293B)),
+                    style:
+                        const TextStyle(fontSize: 11, color: Color(0xFF1E293B)),
                     overflow: TextOverflow.ellipsis)
                 : canAssign
                     ? GestureDetector(
@@ -1877,43 +2044,45 @@ class _ProcessListPageState extends State<ProcessListPage>
                           child: const Text('Assign',
                               textAlign: TextAlign.center,
                               style: TextStyle(
-                                  color: Colors.white, fontSize: 11,
+                                  color: Colors.white,
+                                  fontSize: 11,
                                   fontWeight: FontWeight.w700)),
                         ))
                     : const Text('—',
-                        style: TextStyle(
-                            fontSize: 11, color: Color(0xFF94A3B8)))),
+                        style:
+                            TextStyle(fontSize: 11, color: Color(0xFF94A3B8)))),
         const SizedBox(width: 8),
-        Expanded(flex: 2,
+        Expanded(
+            flex: 2,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
               decoration: BoxDecoration(
-                  color: statusColor,
-                  borderRadius: BorderRadius.circular(4)),
+                  color: statusColor, borderRadius: BorderRadius.circular(4)),
               child: Text(p.statusLabel,
                   style: const TextStyle(
-                      color: Colors.white, fontSize: 10,
+                      color: Colors.white,
+                      fontSize: 10,
                       fontWeight: FontWeight.w600),
                   textAlign: TextAlign.center),
             )),
         const SizedBox(width: 8),
-        Expanded(flex: 2,
+        Expanded(
+            flex: 2,
             child: Wrap(spacing: 4, runSpacing: 4, children: [
               if (p.hasFile) ...[
-                _actionBtn(label: 'Reupload',
-                    color: const Color(0xFFF59E0B),
-                    icon: Icons.upload_rounded,
-                    onTap: () => _showUploadDialog(p)),
-                _actionBtn(label: 'View',
+                _actionBtn(
+                    label: 'View File',
                     color: const Color(0xFF3B82F6),
                     icon: Icons.insert_drive_file_outlined,
                     onTap: () => _openFile(p)),
               ] else
-                _actionBtn(label: 'Upload',
-                    color: const Color(0xFF3B82F6),
-                    icon: Icons.upload_file_outlined,
-                    onTap: () => _showUploadDialog(p)),
-              _actionBtn(label: 'Email',
+                const Text('Not Uploaded',
+                    style: TextStyle(
+                        color: Color(0xFFEF4444),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500)),
+              _actionBtn(
+                  label: 'Email',
                   color: const Color(0xFF1E293B),
                   icon: Icons.email_outlined,
                   onTap: () => _showEmailDialog(p)),
@@ -1921,7 +2090,7 @@ class _ProcessListPageState extends State<ProcessListPage>
       ]),
     );
   }
- 
+
   void _showCreateReportTaskDialog() {
     showModalBottomSheet(
       context: context,
@@ -1931,46 +2100,51 @@ class _ProcessListPageState extends State<ProcessListPage>
           projectId: widget.projectId, onCreated: _onActionComplete),
     );
   }
- 
+
   // ─────────────────────────────────────────────────────────────────────────
   // Extra tabs
   // ─────────────────────────────────────────────────────────────────────────
- 
+
   Widget _buildExtraTabContent(String tabKey) {
     switch (tabKey) {
-      case 'mom':             return _buildMinutesOfMeetingTab();
-      case 'cc_progress':     return _buildCCProgressTab();
-      case 'layout_approval': return _buildLayoutApprovalTab();
-      case 'oc_progress':     return _buildOCProgressTab();
-      default:                return _emptyProcessState('Content not available.');
+      case 'mom':
+        return _buildMinutesOfMeetingTab();
+      case 'cc_progress':
+        return _buildCCProgressTab();
+      case 'layout_approval':
+        return _buildLayoutApprovalTab();
+      case 'oc_progress':
+        return _buildOCProgressTab();
+      default:
+        return _emptyProcessState('Content not available.');
     }
   }
- 
+
   Widget _buildMinutesOfMeetingTab() => MinutesOfMeetingPage(
-    projectId: widget.projectId,
-    projectName: widget.projectName,
-    isAdmin: _isAdmin,
-  );
- 
+        projectId: widget.projectId,
+        projectName: widget.projectName,
+        isAdmin: _isAdmin,
+      );
+
   Widget _buildCCProgressTab() => CcProgressPage(
-    projectId: widget.projectId,
-    projectName: widget.projectName,
-  );
- 
+        projectId: widget.projectId,
+        projectName: widget.projectName,
+      );
+
   Widget _buildLayoutApprovalTab() => LayoutApprovalPage(
-        projectId:   widget.projectId,
+        projectId: widget.projectId,
         projectName: widget.projectName,
       );
- 
+
   Widget _buildOCProgressTab() => OcProgressPage(
-        projectId:   widget.projectId,
+        projectId: widget.projectId,
         projectName: widget.projectName,
       );
- 
+
   // ─────────────────────────────────────────────────────────────────────────
   // Generic stage tab
   // ─────────────────────────────────────────────────────────────────────────
- 
+
   Widget _buildGenericStageTab(ProcessStageModel stage) {
     final filtered = _searchQuery.isEmpty
         ? stage.processes
@@ -1979,13 +2153,13 @@ class _ProcessListPageState extends State<ProcessListPage>
                 .toLowerCase()
                 .contains(_searchQuery.toLowerCase()))
             .toList();
- 
+
     final emptyMessage = _searchQuery.isEmpty
         ? (_isAdmin
             ? 'No processes found for this stage.'
             : 'No processes assigned to you in this stage.')
         : 'No results for "$_searchQuery"';
- 
+
     return RefreshIndicator(
       onRefresh: () => _loadProcesses(silent: false),
       color: AppColors.primaryGreen,
@@ -2000,14 +2174,13 @@ class _ProcessListPageState extends State<ProcessListPage>
       ]),
     );
   }
- 
+
   Widget _emptyProcessState(String message) => Center(
         child: Padding(
           padding: const EdgeInsets.all(40),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.assignment_outlined,
-                size: 48,
-                color: AppColors.primaryGreen.withValues(alpha: 0.3)),
+                size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
             const SizedBox(height: 12),
             Text(message,
                 textAlign: TextAlign.center,
@@ -2015,23 +2188,25 @@ class _ProcessListPageState extends State<ProcessListPage>
           ]),
         ),
       );
- 
+
   // ── Dialog handlers ────────────────────────────────────────────────────────
- 
+
   void _showAssignDialog(ProcessListItemModel p) {
     if (_isTeamLeader) {
       final teamId = p.workingTeamId;
-      if (teamId != null && !_leaderOwnedTeamIds.contains(teamId)) {
+      if (teamId != null &&
+          _leaderOwnedTeamIds.isNotEmpty &&
+          !_leaderOwnedTeamIds.contains(teamId)) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              'You can assign tasks only to members of your own team.'),
+          content:
+              Text('You can assign tasks only to members of your own team.'),
           backgroundColor: Color(0xFFEF4444),
         ));
         return;
       }
     }
     if (!_isAdmin && !_isTeamLeader) return;
- 
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2046,8 +2221,20 @@ class _ProcessListPageState extends State<ProcessListPage>
       ),
     );
   }
- 
+
   void _showUploadDialog(ProcessListItemModel p) {
+    final uid = _currentUserId;
+    if (_isAdmin ||
+        _isTeamLeader ||
+        uid == null ||
+        !p.isAssignedToCurrentUser(uid)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Only the assigned team member can upload this process.'),
+        backgroundColor: Color(0xFFEF4444),
+      ));
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2060,28 +2247,11 @@ class _ProcessListPageState extends State<ProcessListPage>
       ),
     );
   }
- 
+
   void _openFile(ProcessListItemModel p) {
-    final path = p.filePath;
-    if (path == null || path.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('No file path available'),
-        backgroundColor: Color(0xFFEF4444),
-      ));
-      return;
-    }
-    String fullUrl = path.trim();
-    if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
-      final base = ApiConstants.baseUrl.replaceAll(RegExp(r'/$'), '');
-      final rel = fullUrl.startsWith('/') ? fullUrl : '/$fullUrl';
-      fullUrl = '$base$rel';
-    }
-    Navigator.push(context,
-        MaterialPageRoute(
-          builder: (_) => FileViewerPage(url: fullUrl, title: p.processName),
-        ));
+    _openDocumentUrl(context, p.filePath, p.processName);
   }
- 
+
   void _showEmailDialog(ProcessListItemModel p) {
     showModalBottomSheet(
       context: context,
@@ -2090,9 +2260,9 @@ class _ProcessListPageState extends State<ProcessListPage>
       builder: (_) => _EmailDialog(process: p, projectId: widget.projectId),
     );
   }
- 
+
   // ── AppBar ─────────────────────────────────────────────────────────────────
- 
+
   AppBar _buildAppBar() {
     final ctrl = _tabController;
     final totalTabs = _stages.length + _extraTabs.length;
@@ -2110,18 +2280,21 @@ class _ProcessListPageState extends State<ProcessListPage>
         Text(widget.projectName,
             style: const TextStyle(
                 color: Color(0xFF1E293B),
-                fontWeight: FontWeight.w700, fontSize: 16)),
+                fontWeight: FontWeight.w700,
+                fontSize: 16)),
         const Text('Process List',
             style: TextStyle(
                 color: Color(0xFF64748B),
-                fontSize: 12, fontWeight: FontWeight.w400)),
+                fontSize: 12,
+                fontWeight: FontWeight.w400)),
       ]),
       actions: [
         if (_isRefreshing)
           Padding(
             padding: const EdgeInsets.only(right: 14),
             child: SizedBox(
-              width: 20, height: 20,
+              width: 20,
+              height: 20,
               child: CircularProgressIndicator(
                   strokeWidth: 2.5, color: AppColors.primaryGreen),
             ),
@@ -2139,8 +2312,8 @@ class _ProcessListPageState extends State<ProcessListPage>
               child: Container(
                 decoration: const BoxDecoration(
                     color: Colors.white,
-                    border: Border(
-                        bottom: BorderSide(color: Color(0xFFE2E8F0)))),
+                    border:
+                        Border(bottom: BorderSide(color: Color(0xFFE2E8F0)))),
                 child: TabBar(
                   controller: ctrl,
                   isScrollable: true,
@@ -2204,7 +2377,7 @@ class _ProcessListPageState extends State<ProcessListPage>
           : null,
     );
   }
- 
+
   Widget _buildSearchBar() => Container(
         margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -2273,9 +2446,9 @@ class _ProcessListPageState extends State<ProcessListPage>
             ),
         ]),
       );
- 
+
   // ── Build body ─────────────────────────────────────────────────────────────
- 
+
   Widget _buildBody() {
     if (_isLoading) {
       return Center(
@@ -2310,51 +2483,57 @@ class _ProcessListPageState extends State<ProcessListPage>
         ),
       );
     }
- 
+
     final totalTabs = _stages.length + _extraTabs.length;
     if (totalTabs == 0) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.assignment_outlined,
-              size: 56,
-              color: AppColors.primaryGreen.withValues(alpha: 0.4)),
+              size: 56, color: AppColors.primaryGreen.withValues(alpha: 0.4)),
           const SizedBox(height: 12),
           const Text('No processes found',
               style: TextStyle(color: Color(0xFF64748B), fontSize: 16)),
         ]),
       );
     }
- 
+
     final ctrl = _tabController;
     if (ctrl == null || ctrl.length != totalTabs) {
       return Column(children: [
         _buildSearchBar(),
-        Expanded(child: Center(
-            child: CircularProgressIndicator(color: AppColors.primaryGreen))),
+        Expanded(
+            child: Center(
+                child:
+                    CircularProgressIndicator(color: AppColors.primaryGreen))),
       ]);
     }
- 
+
     final tabViews = <Widget>[
       ..._stages.map((stage) {
         switch (stage.stageKey) {
-          case 'pmc_application': return _buildStage0Tab();
-          case 'stage3':          return _buildStage3Tab();
-          case 'stage3_1':        return _buildStage3_1Tab();
-          case 'stage3_2':        return _buildStage3_2Tab();
-          default:                return _buildGenericStageTab(stage);
+          case 'pmc_application':
+            return _buildStage0Tab();
+          case 'stage3':
+            return _buildStage3Tab();
+          case 'stage3_1':
+            return _buildStage3_1Tab();
+          case 'stage3_2':
+            return _buildStage3_2Tab();
+          default:
+            return _buildGenericStageTab(stage);
         }
       }),
       ..._extraTabs.map((t) => _buildExtraTabContent(t.key)),
     ];
- 
+
     final currentIsStageTab = _currentTabIndex < _stages.length;
- 
+
     return Column(children: [
       if (currentIsStageTab) _buildSearchBar(),
       Expanded(child: TabBarView(controller: ctrl, children: tabViews)),
     ]);
   }
- 
+
   @override
   Widget build(BuildContext context) => Scaffold(
         backgroundColor: const Color(0xFFF8FAFC),
@@ -2362,18 +2541,18 @@ class _ProcessListPageState extends State<ProcessListPage>
         body: _buildBody(),
       );
 }
- 
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Helper data classes
 // ═══════════════════════════════════════════════════════════════════════════
- 
+
 class _ExtraTab {
   final String key;
   final String label;
   final IconData icon;
   const _ExtraTab({required this.key, required this.label, required this.icon});
 }
- 
+
 class _Stage3SubTabDef {
   final Stage3SubTab key;
   final String label;
@@ -2381,11 +2560,11 @@ class _Stage3SubTabDef {
   const _Stage3SubTabDef(
       {required this.key, required this.label, required this.icon});
 }
- 
+
 // ═══════════════════════════════════════════════════════════════════════════
 // All remaining widget classes are unchanged from the original file.
 // ═══════════════════════════════════════════════════════════════════════════
- 
+
 class _MinutesOfMeetingTab extends StatefulWidget {
   final int projectId;
   final bool isAdmin;
@@ -2393,18 +2572,24 @@ class _MinutesOfMeetingTab extends StatefulWidget {
   @override
   State<_MinutesOfMeetingTab> createState() => _MinutesOfMeetingTabState();
 }
- 
+
 class _MinutesOfMeetingTabState extends State<_MinutesOfMeetingTab> {
   List<Map<String, dynamic>> _meetings = [];
   bool _isLoading = true;
   String? _error;
- 
+
   @override
-  void initState() { super.initState(); _loadMeetings(); }
- 
+  void initState() {
+    super.initState();
+    _loadMeetings();
+  }
+
   Future<void> _loadMeetings() async {
     if (!mounted) return;
-    setState(() { _isLoading = true; _error = null; });
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
     try {
       final token = await AuthStorageService.getToken();
       if (token == null) throw Exception('Session expired');
@@ -2424,22 +2609,33 @@ class _MinutesOfMeetingTabState extends State<_MinutesOfMeetingTab> {
           _isLoading = false;
         });
       } else {
-        setState(() { _meetings = []; _isLoading = false; });
+        setState(() {
+          _meetings = [];
+          _isLoading = false;
+        });
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = e.toString(); _isLoading = false; });
+      setState(() {
+        _error = e.toString();
+        _isLoading = false;
+      });
     }
   }
- 
+
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) return Center(child: CircularProgressIndicator(color: AppColors.primaryGreen));
+    if (_isLoading)
+      return Center(
+          child: CircularProgressIndicator(color: AppColors.primaryGreen));
     return RefreshIndicator(
       onRefresh: _loadMeetings,
       color: AppColors.primaryGreen,
       child: _meetings.isEmpty
-          ? ListView(children: [_emptyState('No meetings recorded yet.', Icons.calendar_today_outlined, const Color(0xFF3B82F6))])
+          ? ListView(children: [
+              _emptyState('No meetings recorded yet.',
+                  Icons.calendar_today_outlined, const Color(0xFF3B82F6))
+            ])
           : ListView.builder(
               padding: const EdgeInsets.all(16),
               itemCount: _meetings.length,
@@ -2452,43 +2648,66 @@ class _MinutesOfMeetingTabState extends State<_MinutesOfMeetingTab> {
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: const Color(0xFFE2E8F0)),
-                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 4, offset: const Offset(0, 1))]),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
-                      const Icon(Icons.calendar_today, size: 14, color: Color(0xFF3B82F6)),
-                      const SizedBox(width: 6),
-                      Text(m['meeting_date']?.toString() ?? m['date']?.toString() ?? 'N/A',
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF3B82F6), fontWeight: FontWeight.w600)),
-                    ]),
-                    const SizedBox(height: 8),
-                    Text(m['title']?.toString() ?? m['meeting_title']?.toString() ?? 'Meeting',
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF1E293B))),
-                    if (m['description'] != null) ...[
-                      const SizedBox(height: 6),
-                      Text(m['description'].toString(),
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-                          maxLines: 2, overflow: TextOverflow.ellipsis),
-                    ],
-                  ]),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1))
+                      ]),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          const Icon(Icons.calendar_today,
+                              size: 14, color: Color(0xFF3B82F6)),
+                          const SizedBox(width: 6),
+                          Text(
+                              m['meeting_date']?.toString() ??
+                                  m['date']?.toString() ??
+                                  'N/A',
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF3B82F6),
+                                  fontWeight: FontWeight.w600)),
+                        ]),
+                        const SizedBox(height: 8),
+                        Text(
+                            m['title']?.toString() ??
+                                m['meeting_title']?.toString() ??
+                                'Meeting',
+                            style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1E293B))),
+                        if (m['description'] != null) ...[
+                          const SizedBox(height: 6),
+                          Text(m['description'].toString(),
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF64748B)),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis),
+                        ],
+                      ]),
                 );
               },
             ),
     );
   }
- 
+
   Widget _emptyState(String msg, IconData icon, Color color) => Center(
         child: Padding(
           padding: const EdgeInsets.all(40),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(icon, size: 52, color: color.withValues(alpha: 0.3)),
             const SizedBox(height: 12),
-            Text(msg, textAlign: TextAlign.center,
+            Text(msg,
+                textAlign: TextAlign.center,
                 style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
           ]),
         ),
       );
 }
- 
+
 class _CCProgressTab extends StatefulWidget {
   final int projectId;
   final bool isAdmin;
@@ -2496,72 +2715,114 @@ class _CCProgressTab extends StatefulWidget {
   @override
   State<_CCProgressTab> createState() => _CCProgressTabState();
 }
- 
-class _CCProgressTabState extends State<_CCProgressTab> with TickerProviderStateMixin {
+
+class _CCProgressTabState extends State<_CCProgressTab>
+    with TickerProviderStateMixin {
   TabController? _subCtrl;
   static const _subTabs = [
     _CCSubTab(key: 'cc_application', label: 'CC Application'),
-    _CCSubTab(key: 'cc_scrutiny',    label: 'Scrutiny'),
-    _CCSubTab(key: 'cc_approval',    label: 'Approval'),
-    _CCSubTab(key: 'cc_documents',   label: 'Documents'),
+    _CCSubTab(key: 'cc_scrutiny', label: 'Scrutiny'),
+    _CCSubTab(key: 'cc_approval', label: 'Approval'),
+    _CCSubTab(key: 'cc_documents', label: 'Documents'),
   ];
   List<ProcessListItemModel> _processes = [];
   bool _isLoading = true;
- 
+
   @override
-  void initState() { super.initState(); _subCtrl = TabController(length: _subTabs.length, vsync: this); _loadData(); }
+  void initState() {
+    super.initState();
+    _subCtrl = TabController(length: _subTabs.length, vsync: this);
+    _loadData();
+  }
+
   @override
-  void dispose() { _subCtrl?.dispose(); super.dispose(); }
- 
+  void dispose() {
+    _subCtrl?.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadData() async {
     if (!mounted) return;
-    setState(() { _isLoading = true; });
+    setState(() {
+      _isLoading = true;
+    });
     try {
       final token = await AuthStorageService.getToken();
       if (token == null) return;
-      final url = Uri.parse('${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/cc-processes');
-      final response = await http.get(url, headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 20));
+      final url = Uri.parse(
+          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/cc-processes');
+      final response = await http.get(url, headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token'
+      }).timeout(const Duration(seconds: 20));
       if (!mounted) return;
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final body = jsonDecode(response.body);
         final raw = body['data'] ?? body['processes'] ?? [];
-        setState(() { _processes = (raw as List).map((e) => ProcessListItemModel.fromJson(e)).toList(); });
+        setState(() {
+          _processes = (raw as List)
+              .map((e) => ProcessListItemModel.fromJson(e))
+              .toList();
+        });
       }
     } catch (_) {}
     if (mounted) setState(() => _isLoading = false);
   }
- 
+
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) return Center(child: CircularProgressIndicator(color: AppColors.primaryGreen));
+    if (_isLoading)
+      return Center(
+          child: CircularProgressIndicator(color: AppColors.primaryGreen));
     final ctrl = _subCtrl;
     if (ctrl == null) return const SizedBox.shrink();
     return Column(children: [
-      Container(color: Colors.white,
-          child: TabBar(controller: ctrl, isScrollable: true, tabAlignment: TabAlignment.start,
-              labelColor: AppColors.primaryGreen, unselectedLabelColor: const Color(0xFF94A3B8),
-              indicatorColor: AppColors.primaryGreen, indicatorWeight: 2,
-              labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-              unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
+      Container(
+          color: Colors.white,
+          child: TabBar(
+              controller: ctrl,
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
+              labelColor: AppColors.primaryGreen,
+              unselectedLabelColor: const Color(0xFF94A3B8),
+              indicatorColor: AppColors.primaryGreen,
+              indicatorWeight: 2,
+              labelStyle:
+                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+              unselectedLabelStyle:
+                  const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
               tabs: _subTabs.map((t) => Tab(text: t.label)).toList())),
-      Expanded(child: TabBarView(controller: ctrl, children: _subTabs.map((t) => _buildSubContent(t.key)).toList())),
+      Expanded(
+          child: TabBarView(
+              controller: ctrl,
+              children: _subTabs.map((t) => _buildSubContent(t.key)).toList())),
     ]);
   }
- 
+
   Widget _buildSubContent(String key) {
-    final filtered = _processes.where((p) => (p.subStage ?? p.stage) == key).toList();
-    if (filtered.isEmpty) return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.construction_outlined, size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
-      const SizedBox(height: 12),
-      const Text('No CC processes found', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
-    ]));
-    return ListView.builder(padding: const EdgeInsets.all(16), itemCount: filtered.length,
+    final filtered =
+        _processes.where((p) => (p.subStage ?? p.stage) == key).toList();
+    if (filtered.isEmpty)
+      return Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.construction_outlined,
+            size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
+        const SizedBox(height: 12),
+        const Text('No CC processes found',
+            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
+      ]));
+    return ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: filtered.length,
         itemBuilder: (_, i) => _CCProcessCard(process: filtered[i]));
   }
 }
- 
-class _CCSubTab { final String key, label; const _CCSubTab({required this.key, required this.label}); }
- 
+
+class _CCSubTab {
+  final String key, label;
+  const _CCSubTab({required this.key, required this.label});
+}
+
 class _CCProcessCard extends StatelessWidget {
   final ProcessListItemModel process;
   const _CCProcessCard({required this.process});
@@ -2569,21 +2830,37 @@ class _CCProcessCard extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE2E8F0))),
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE2E8F0))),
         child: Row(children: [
-          Expanded(child: Text(process.processName, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1E293B)))),
+          Expanded(
+              child: Text(process.processName,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF1E293B)))),
           const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-                color: process.status == 'completed' ? const Color(0xFF22C55E) : process.status == 'assigned' ? const Color(0xFFF59E0B) : const Color(0xFF94A3B8),
+                color: process.status == 'completed'
+                    ? const Color(0xFF22C55E)
+                    : process.status == 'assigned'
+                        ? const Color(0xFFF59E0B)
+                        : const Color(0xFF94A3B8),
                 borderRadius: BorderRadius.circular(4)),
-            child: Text(process.statusLabel, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600)),
+            child: Text(process.statusLabel,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600)),
           ),
         ]),
       );
 }
- 
+
 class _LayoutApprovalTab extends StatefulWidget {
   final int projectId;
   final bool isAdmin;
@@ -2591,69 +2868,110 @@ class _LayoutApprovalTab extends StatefulWidget {
   @override
   State<_LayoutApprovalTab> createState() => _LayoutApprovalTabState();
 }
- 
-class _LayoutApprovalTabState extends State<_LayoutApprovalTab> with TickerProviderStateMixin {
+
+class _LayoutApprovalTabState extends State<_LayoutApprovalTab>
+    with TickerProviderStateMixin {
   TabController? _subCtrl;
   static const _subTabs = [
     _LayoutSubTab(key: 'layout_application', label: 'Application'),
-    _LayoutSubTab(key: 'layout_scrutiny',    label: 'Scrutiny'),
-    _LayoutSubTab(key: 'layout_approval',    label: 'Approval'),
-    _LayoutSubTab(key: 'layout_documents',   label: 'Documents'),
+    _LayoutSubTab(key: 'layout_scrutiny', label: 'Scrutiny'),
+    _LayoutSubTab(key: 'layout_approval', label: 'Approval'),
+    _LayoutSubTab(key: 'layout_documents', label: 'Documents'),
   ];
   List<ProcessListItemModel> _processes = [];
   bool _isLoading = true;
- 
+
   @override
-  void initState() { super.initState(); _subCtrl = TabController(length: _subTabs.length, vsync: this); _loadData(); }
+  void initState() {
+    super.initState();
+    _subCtrl = TabController(length: _subTabs.length, vsync: this);
+    _loadData();
+  }
+
   @override
-  void dispose() { _subCtrl?.dispose(); super.dispose(); }
- 
+  void dispose() {
+    _subCtrl?.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadData() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
     try {
       final token = await AuthStorageService.getToken();
       if (token == null) return;
-      final url = Uri.parse('${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/layout-processes');
-      final response = await http.get(url, headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 20));
+      final url = Uri.parse(
+          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/layout-processes');
+      final response = await http.get(url, headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token'
+      }).timeout(const Duration(seconds: 20));
       if (!mounted) return;
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final body = jsonDecode(response.body);
         final raw = body['data'] ?? body['processes'] ?? [];
-        setState(() { _processes = (raw as List).map((e) => ProcessListItemModel.fromJson(e)).toList(); });
+        setState(() {
+          _processes = (raw as List)
+              .map((e) => ProcessListItemModel.fromJson(e))
+              .toList();
+        });
       }
     } catch (_) {}
     if (mounted) setState(() => _isLoading = false);
   }
- 
+
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) return Center(child: CircularProgressIndicator(color: AppColors.primaryGreen));
+    if (_isLoading)
+      return Center(
+          child: CircularProgressIndicator(color: AppColors.primaryGreen));
     final ctrl = _subCtrl;
     if (ctrl == null) return const SizedBox.shrink();
     return Column(children: [
-      Container(color: Colors.white, child: TabBar(controller: ctrl, isScrollable: true, tabAlignment: TabAlignment.start,
-          labelColor: AppColors.primaryGreen, unselectedLabelColor: const Color(0xFF94A3B8),
-          indicatorColor: AppColors.primaryGreen, indicatorWeight: 2,
-          labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-          tabs: _subTabs.map((t) => Tab(text: t.label)).toList())),
-      Expanded(child: TabBarView(controller: ctrl, children: _subTabs.map((t) => _buildSubContent(t.key)).toList())),
+      Container(
+          color: Colors.white,
+          child: TabBar(
+              controller: ctrl,
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
+              labelColor: AppColors.primaryGreen,
+              unselectedLabelColor: const Color(0xFF94A3B8),
+              indicatorColor: AppColors.primaryGreen,
+              indicatorWeight: 2,
+              labelStyle:
+                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+              tabs: _subTabs.map((t) => Tab(text: t.label)).toList())),
+      Expanded(
+          child: TabBarView(
+              controller: ctrl,
+              children: _subTabs.map((t) => _buildSubContent(t.key)).toList())),
     ]);
   }
- 
+
   Widget _buildSubContent(String key) {
-    final filtered = _processes.where((p) => (p.subStage ?? p.stage) == key).toList();
-    if (filtered.isEmpty) return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.layers_outlined, size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
-      const SizedBox(height: 12),
-      const Text('No layout approval processes found', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
-    ]));
-    return ListView.builder(padding: const EdgeInsets.all(16), itemCount: filtered.length, itemBuilder: (_, i) => _CCProcessCard(process: filtered[i]));
+    final filtered =
+        _processes.where((p) => (p.subStage ?? p.stage) == key).toList();
+    if (filtered.isEmpty)
+      return Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.layers_outlined,
+            size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
+        const SizedBox(height: 12),
+        const Text('No layout approval processes found',
+            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
+      ]));
+    return ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: filtered.length,
+        itemBuilder: (_, i) => _CCProcessCard(process: filtered[i]));
   }
 }
- 
-class _LayoutSubTab { final String key, label; const _LayoutSubTab({required this.key, required this.label}); }
- 
+
+class _LayoutSubTab {
+  final String key, label;
+  const _LayoutSubTab({required this.key, required this.label});
+}
+
 class _OCProgressTab extends StatefulWidget {
   final int projectId;
   final bool isAdmin;
@@ -2661,148 +2979,197 @@ class _OCProgressTab extends StatefulWidget {
   @override
   State<_OCProgressTab> createState() => _OCProgressTabState();
 }
- 
-class _OCProgressTabState extends State<_OCProgressTab> with TickerProviderStateMixin {
+
+class _OCProgressTabState extends State<_OCProgressTab>
+    with TickerProviderStateMixin {
   TabController? _subCtrl;
   static const _subTabs = [
     _OCSubTab(key: 'oc_application', label: 'Application'),
-    _OCSubTab(key: 'oc_scrutiny',    label: 'Scrutiny'),
-    _OCSubTab(key: 'oc_completion',  label: 'Completion Certificate'),
-    _OCSubTab(key: 'oc_documents',   label: 'Documents'),
+    _OCSubTab(key: 'oc_scrutiny', label: 'Scrutiny'),
+    _OCSubTab(key: 'oc_completion', label: 'Completion Certificate'),
+    _OCSubTab(key: 'oc_documents', label: 'Documents'),
   ];
   List<ProcessListItemModel> _processes = [];
   bool _isLoading = true;
- 
+
   @override
-  void initState() { super.initState(); _subCtrl = TabController(length: _subTabs.length, vsync: this); _loadData(); }
+  void initState() {
+    super.initState();
+    _subCtrl = TabController(length: _subTabs.length, vsync: this);
+    _loadData();
+  }
+
   @override
-  void dispose() { _subCtrl?.dispose(); super.dispose(); }
- 
+  void dispose() {
+    _subCtrl?.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadData() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
     try {
       final token = await AuthStorageService.getToken();
       if (token == null) return;
-      final url = Uri.parse('${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/oc-processes');
-      final response = await http.get(url, headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 20));
+      final url = Uri.parse(
+          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/oc-processes');
+      final response = await http.get(url, headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token'
+      }).timeout(const Duration(seconds: 20));
       if (!mounted) return;
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final body = jsonDecode(response.body);
         final raw = body['data'] ?? body['processes'] ?? [];
-        setState(() { _processes = (raw as List).map((e) => ProcessListItemModel.fromJson(e)).toList(); });
+        setState(() {
+          _processes = (raw as List)
+              .map((e) => ProcessListItemModel.fromJson(e))
+              .toList();
+        });
       }
     } catch (_) {}
     if (mounted) setState(() => _isLoading = false);
   }
- 
+
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) return Center(child: CircularProgressIndicator(color: AppColors.primaryGreen));
+    if (_isLoading)
+      return Center(
+          child: CircularProgressIndicator(color: AppColors.primaryGreen));
     final ctrl = _subCtrl;
     if (ctrl == null) return const SizedBox.shrink();
     return Column(children: [
-      Container(color: Colors.white, child: TabBar(controller: ctrl, isScrollable: true, tabAlignment: TabAlignment.start,
-          labelColor: AppColors.primaryGreen, unselectedLabelColor: const Color(0xFF94A3B8),
-          indicatorColor: AppColors.primaryGreen, indicatorWeight: 2,
-          labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-          tabs: _subTabs.map((t) => Tab(text: t.label)).toList())),
-      Expanded(child: TabBarView(controller: ctrl, children: _subTabs.map((t) => _buildSubContent(t.key)).toList())),
+      Container(
+          color: Colors.white,
+          child: TabBar(
+              controller: ctrl,
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
+              labelColor: AppColors.primaryGreen,
+              unselectedLabelColor: const Color(0xFF94A3B8),
+              indicatorColor: AppColors.primaryGreen,
+              indicatorWeight: 2,
+              labelStyle:
+                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+              tabs: _subTabs.map((t) => Tab(text: t.label)).toList())),
+      Expanded(
+          child: TabBarView(
+              controller: ctrl,
+              children: _subTabs.map((t) => _buildSubContent(t.key)).toList())),
     ]);
   }
- 
+
   Widget _buildSubContent(String key) {
-    final filtered = _processes.where((p) => (p.subStage ?? p.stage) == key).toList();
-    if (filtered.isEmpty) return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.check_circle_outline, size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
-      const SizedBox(height: 12),
-      const Text('No OC progress processes found', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
-    ]));
-    return ListView.builder(padding: const EdgeInsets.all(16), itemCount: filtered.length, itemBuilder: (_, i) => _CCProcessCard(process: filtered[i]));
+    final filtered =
+        _processes.where((p) => (p.subStage ?? p.stage) == key).toList();
+    if (filtered.isEmpty)
+      return Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.check_circle_outline,
+            size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
+        const SizedBox(height: 12),
+        const Text('No OC progress processes found',
+            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
+      ]));
+    return ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: filtered.length,
+        itemBuilder: (_, i) => _CCProcessCard(process: filtered[i]));
   }
 }
- 
-class _OCSubTab { final String key, label; const _OCSubTab({required this.key, required this.label}); }
- 
+
+class _OCSubTab {
+  final String key, label;
+  const _OCSubTab({required this.key, required this.label});
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Drawing Requests Tab
 // ═══════════════════════════════════════════════════════════════════════════
- 
+
 class _DrawingRequestsTab extends StatefulWidget {
   final int projectId;
   final bool isAdmin;
   final bool isTeamLeader;
- 
+
   const _DrawingRequestsTab({
     required this.projectId,
     required this.isAdmin,
     required this.isTeamLeader,
   });
- 
+
   @override
   State<_DrawingRequestsTab> createState() => _DrawingRequestsTabState();
 }
- 
+
 class _DrawingRequestsTabState extends State<_DrawingRequestsTab> {
   List<Map<String, dynamic>> _tasks = [];
   bool _isLoading = true;
   String? _error;
- 
+
   @override
   void initState() {
     super.initState();
     _loadTasks();
   }
- 
+
   Future<void> _loadTasks() async {
     if (!mounted) return;
-    setState(() { _isLoading = true; _error = null; });
- 
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
     try {
       final token = await AuthStorageService.getToken();
       if (token == null) throw Exception('Session expired');
- 
+
       final url = Uri.parse(
         '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/drawing-tasks',
       );
- 
+
       final response = await http.get(url, headers: {
         'Accept': 'application/json',
         'Authorization': 'Bearer $token',
       }).timeout(const Duration(seconds: 20));
- 
+
       if (!mounted) return;
- 
+
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final body = jsonDecode(response.body);
         final raw = body['data'] ?? body['tasks'] ?? [];
- 
+
         final tasks = List<Map<String, dynamic>>.from(
           (raw as List).map((e) => Map<String, dynamic>.from(e)),
         );
- 
+
         for (final task in tasks) {
           final filePath = task['file_path']?.toString();
-          if (filePath != null &&
-              filePath.isNotEmpty &&
-              !filePath.startsWith('http://') &&
-              !filePath.startsWith('https://')) {
-            final base = ApiConstants.baseUrl.replaceAll(RegExp(r'/$'), '');
-            final rel = filePath.startsWith('/') ? filePath : '/$filePath';
-            task['file_path'] = '$base$rel';
+          if (filePath != null && filePath.trim().isNotEmpty) {
+            task['file_path'] = _resolveDocumentUrl(filePath);
           }
         }
- 
-        setState(() { _tasks = tasks; _isLoading = false; });
+
+        setState(() {
+          _tasks = tasks;
+          _isLoading = false;
+        });
       } else {
-        setState(() { _tasks = []; _isLoading = false; });
+        setState(() {
+          _tasks = [];
+          _isLoading = false;
+        });
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _tasks = []; _isLoading = false; _error = e.toString(); });
+      setState(() {
+        _tasks = [];
+        _isLoading = false;
+        _error = e.toString();
+      });
     }
   }
- 
+
   @override
   Widget build(BuildContext context) {
     return Column(children: [
@@ -2811,7 +3178,10 @@ class _DrawingRequestsTabState extends State<_DrawingRequestsTab> {
         child: Align(
           alignment: Alignment.centerLeft,
           child: Text('Drawing Requests',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.primaryGreen)),
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.primaryGreen)),
         ),
       ),
       if (widget.isAdmin || widget.isTeamLeader)
@@ -2822,19 +3192,29 @@ class _DrawingRequestsTabState extends State<_DrawingRequestsTab> {
             child: GestureDetector(
               onTap: _showCreateDrawingDialog,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(color: AppColors.primaryGreen, borderRadius: BorderRadius.circular(8)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                    color: AppColors.primaryGreen,
+                    borderRadius: BorderRadius.circular(8)),
                 child: const Row(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.add, size: 15, color: Colors.white),
                   SizedBox(width: 6),
-                  Text('Create Drawing Task', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  Text('Create Drawing Task',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600)),
                 ]),
               ),
             ),
           ),
         ),
       if (_isLoading)
-        Expanded(child: Center(child: CircularProgressIndicator(color: AppColors.primaryGreen)))
+        Expanded(
+            child: Center(
+                child:
+                    CircularProgressIndicator(color: AppColors.primaryGreen)))
       else
         Expanded(
           child: RefreshIndicator(
@@ -2845,10 +3225,16 @@ class _DrawingRequestsTabState extends State<_DrawingRequestsTab> {
                     Center(
                       child: Padding(
                         padding: const EdgeInsets.all(40),
-                        child: Column(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(Icons.draw_outlined, size: 52, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
+                        child:
+                            Column(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.draw_outlined,
+                              size: 52,
+                              color: AppColors.primaryGreen
+                                  .withValues(alpha: 0.3)),
                           const SizedBox(height: 12),
-                          const Text('No drawing tasks yet', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
+                          const Text('No drawing tasks yet',
+                              style: TextStyle(
+                                  color: Color(0xFF94A3B8), fontSize: 14)),
                         ]),
                       ),
                     ),
@@ -2856,15 +3242,55 @@ class _DrawingRequestsTabState extends State<_DrawingRequestsTab> {
                 : Column(children: [
                     Container(
                       margin: const EdgeInsets.symmetric(horizontal: 16),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(color: const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE2E8F0))),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFFF1F5F9),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFFE2E8F0))),
                       child: const Row(children: [
-                        Expanded(flex: 3, child: Text('DRAWING NAME', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B)))),
-                        Expanded(flex: 3, child: Text('DESCRIPTION', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B)))),
-                        Expanded(flex: 2, child: Text('DEADLINE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B)))),
-                        Expanded(flex: 2, child: Text('ASSIGNED USER', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B)))),
-                        Expanded(flex: 2, child: Text('STATUS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B)))),
-                        Expanded(flex: 2, child: Text('ACTIONS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF64748B)))),
+                        Expanded(
+                            flex: 3,
+                            child: Text('DRAWING NAME',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF64748B)))),
+                        Expanded(
+                            flex: 3,
+                            child: Text('DESCRIPTION',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF64748B)))),
+                        Expanded(
+                            flex: 2,
+                            child: Text('DEADLINE',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF64748B)))),
+                        Expanded(
+                            flex: 2,
+                            child: Text('ASSIGNED USER',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF64748B)))),
+                        Expanded(
+                            flex: 2,
+                            child: Text('STATUS',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF64748B)))),
+                        Expanded(
+                            flex: 2,
+                            child: Text('ACTIONS',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF64748B)))),
                       ]),
                     ),
                     const SizedBox(height: 4),
@@ -2880,111 +3306,188 @@ class _DrawingRequestsTabState extends State<_DrawingRequestsTab> {
         ),
     ]);
   }
- 
+
   Widget _buildDrawingRow(Map<String, dynamic> task, int index) {
-    final name = (task['task_name']?.toString() ?? '').replaceFirst('Drawing: ', '').trim();
+    final name = (task['task_name']?.toString() ?? '')
+        .replaceFirst('Drawing: ', '')
+        .trim();
     final status = task['status']?.toString() ?? 'pending';
     final deadline = task['task_deadline']?.toString() ?? '-';
     final description = task['task_description']?.toString() ?? '-';
     final assignedUsers = task['assigned_users_names']?.toString() ?? '';
     final filePath = task['file_path']?.toString();
- 
-    Color statusColor = status == 'completed' ? const Color(0xFF22C55E) : status == 'in_progress' ? const Color(0xFFF59E0B) : const Color(0xFFEF4444);
- 
+
+    Color statusColor = status == 'completed'
+        ? const Color(0xFF22C55E)
+        : status == 'in_progress'
+            ? const Color(0xFFF59E0B)
+            : const Color(0xFFEF4444);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE2E8F0))),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFE2E8F0))),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        Expanded(flex: 3, child: Text(name.isEmpty ? '—' : name, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1E293B)), overflow: TextOverflow.ellipsis)),
-        Expanded(flex: 3, child: Text(description, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)), maxLines: 2, overflow: TextOverflow.ellipsis)),
-        Expanded(flex: 2, child: Text(deadline, style: const TextStyle(fontSize: 11, color: Color(0xFF334155)), overflow: TextOverflow.ellipsis)),
-        Expanded(flex: 2, child: assignedUsers.isNotEmpty
-            ? Row(children: [
-                const Icon(Icons.person_outline, size: 13, color: Color(0xFF64748B)),
-                const SizedBox(width: 4),
-                Expanded(child: Text(assignedUsers, style: const TextStyle(fontSize: 11, color: Color(0xFF1E293B), fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis)),
-              ])
-            : const Text('—', style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)))),
-        Expanded(flex: 2, child: Align(alignment: Alignment.centerLeft, child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(color: statusColor, borderRadius: BorderRadius.circular(6)),
-          child: Text(status.replaceAll('_', ' ').toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
-        ))),
-        Expanded(flex: 2, child: filePath != null && filePath.isNotEmpty
-            ? GestureDetector(
-                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => FileViewerPage(url: filePath, title: name))),
-                child: const Text('View File', style: TextStyle(color: Color(0xFF2563EB), fontSize: 11, fontWeight: FontWeight.w600)),
-              )
-            : const Text('Not Uploaded', style: TextStyle(color: Color(0xFFEF4444), fontSize: 11, fontWeight: FontWeight.w500))),
+        Expanded(
+            flex: 3,
+            child: Text(name.isEmpty ? '—' : name,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1E293B)),
+                overflow: TextOverflow.ellipsis)),
+        Expanded(
+            flex: 3,
+            child: Text(description,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis)),
+        Expanded(
+            flex: 2,
+            child: Text(deadline,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF334155)),
+                overflow: TextOverflow.ellipsis)),
+        Expanded(
+            flex: 2,
+            child: assignedUsers.isNotEmpty
+                ? Row(children: [
+                    const Icon(Icons.person_outline,
+                        size: 13, color: Color(0xFF64748B)),
+                    const SizedBox(width: 4),
+                    Expanded(
+                        child: Text(assignedUsers,
+                            style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF1E293B),
+                                fontWeight: FontWeight.w500),
+                            overflow: TextOverflow.ellipsis)),
+                  ])
+                : const Text('—',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)))),
+        Expanded(
+            flex: 2,
+            child: Align(
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: statusColor,
+                      borderRadius: BorderRadius.circular(6)),
+                  child: Text(status.replaceAll('_', ' ').toUpperCase(),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700),
+                      textAlign: TextAlign.center),
+                ))),
+        Expanded(
+            flex: 2,
+            child: filePath != null && filePath.isNotEmpty
+                ? GestureDetector(
+                    onTap: () => _openDocumentUrl(context, filePath, name),
+                    child: const Text('View File',
+                        style: TextStyle(
+                            color: Color(0xFF2563EB),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600)),
+                  )
+                : const Text('Not Uploaded',
+                    style: TextStyle(
+                        color: Color(0xFFEF4444),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500))),
       ]),
     );
   }
- 
+
   void _showCreateDrawingDialog() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _CreateDrawingDialog(projectId: widget.projectId, onCreated: _loadTasks),
+      builder: (_) => _CreateDrawingDialog(
+          projectId: widget.projectId, onCreated: _loadTasks),
     );
   }
 }
- 
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Create Drawing Task Dialog
 // ═══════════════════════════════════════════════════════════════════════════
- 
+
 class _CreateDrawingDialog extends StatefulWidget {
   final int projectId;
   final Future<void> Function() onCreated;
-  const _CreateDrawingDialog({required this.projectId, required this.onCreated});
+  const _CreateDrawingDialog(
+      {required this.projectId, required this.onCreated});
   @override
   State<_CreateDrawingDialog> createState() => _CreateDrawingDialogState();
 }
- 
+
 class _CreateDrawingDialogState extends State<_CreateDrawingDialog> {
   final _nameCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
   DateTime? _deadline;
   bool _isSaving = false;
- 
+
   @override
-  void dispose() { _nameCtrl.dispose(); _descCtrl.dispose(); super.dispose(); }
- 
+  void dispose() {
+    _nameCtrl.dispose();
+    _descCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _pickDeadline() async {
     final picked = await showDatePicker(
       context: context,
       initialDate: _deadline ?? DateTime.now().add(const Duration(days: 7)),
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
-      builder: (ctx, child) => Theme(data: Theme.of(ctx).copyWith(colorScheme: ColorScheme.light(primary: AppColors.primaryGreen)), child: child!),
+      builder: (ctx, child) => Theme(
+          data: Theme.of(ctx).copyWith(
+              colorScheme: ColorScheme.light(primary: AppColors.primaryGreen)),
+          child: child!),
     );
     if (picked != null && mounted) setState(() => _deadline = picked);
   }
- 
-  String get _fmtDeadline => _deadline == null ? 'Select deadline' : '${_deadline!.day.toString().padLeft(2, '0')}/${_deadline!.month.toString().padLeft(2, '0')}/${_deadline!.year}';
- 
+
+  String get _fmtDeadline => _deadline == null
+      ? 'Select deadline'
+      : '${_deadline!.day.toString().padLeft(2, '0')}/${_deadline!.month.toString().padLeft(2, '0')}/${_deadline!.year}';
+
   Future<void> _submit() async {
     if (_isSaving) return;
     if (_nameCtrl.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a drawing name'), backgroundColor: Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Please enter a drawing name'),
+          backgroundColor: Color(0xFFEF4444)));
       return;
     }
     if (_deadline == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a deadline'), backgroundColor: Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Please select a deadline'),
+          backgroundColor: Color(0xFFEF4444)));
       return;
     }
     setState(() => _isSaving = true);
     try {
       final token = await AuthStorageService.getToken();
       if (token == null) throw Exception('Session expired');
-      final dl = '${_deadline!.year}-${_deadline!.month.toString().padLeft(2, '0')}-${_deadline!.day.toString().padLeft(2, '0')}';
+      final dl =
+          '${_deadline!.year}-${_deadline!.month.toString().padLeft(2, '0')}-${_deadline!.day.toString().padLeft(2, '0')}';
       final payload = {
-        'project_id': widget.projectId, 'task_type': 'drawing',
-        'task_name': 'Drawing: ${_nameCtrl.text.trim()}', 'task_description': _descCtrl.text.trim(),
-        'task_deadline': dl, 'drawing_name': _nameCtrl.text.trim(),
-        'drawing_description': _descCtrl.text.trim(), 'drawing_deadline': dl,
+        'project_id': widget.projectId,
+        'task_type': 'drawing',
+        'task_name': 'Drawing: ${_nameCtrl.text.trim()}',
+        'task_description': _descCtrl.text.trim(),
+        'task_deadline': dl,
+        'drawing_name': _nameCtrl.text.trim(),
+        'drawing_description': _descCtrl.text.trim(),
+        'drawing_deadline': dl,
       };
       final candidateUrls = [
         '${ApiConstants.baseUrl}/api/mobile/general-tasks',
@@ -2994,63 +3497,136 @@ class _CreateDrawingDialogState extends State<_CreateDrawingDialog> {
       http.Response? lastResponse;
       dynamic lastDecoded;
       for (final rawUrl in candidateUrls) {
-        final response = await http.post(Uri.parse(rawUrl), headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: jsonEncode(payload)).timeout(const Duration(seconds: 30));
+        final response = await http
+            .post(Uri.parse(rawUrl),
+                headers: {
+                  'Accept': 'application/json',
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer $token'
+                },
+                body: jsonEncode(payload))
+            .timeout(const Duration(seconds: 30));
         dynamic decoded;
-        try { decoded = jsonDecode(response.body); } catch (_) { decoded = {'message': response.body}; }
+        try {
+          decoded = jsonDecode(response.body);
+        } catch (_) {
+          decoded = {'message': response.body};
+        }
         if (response.statusCode >= 200 && response.statusCode < 300) {
           if (!mounted) return;
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text((decoded is Map ? decoded['message']?.toString() : null) ?? 'Drawing task created successfully'), backgroundColor: AppColors.primaryGreen));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(
+                  (decoded is Map ? decoded['message']?.toString() : null) ??
+                      'Drawing task created successfully'),
+              backgroundColor: AppColors.primaryGreen));
           await widget.onCreated();
           return;
         }
         lastResponse = response;
         lastDecoded = decoded;
       }
-      throw Exception((lastDecoded is Map ? lastDecoded['message']?.toString() : null) ?? 'Failed to create drawing task (${lastResponse?.statusCode ?? ''})');
+      throw Exception((lastDecoded is Map
+              ? lastDecoded['message']?.toString()
+              : null) ??
+          'Failed to create drawing task (${lastResponse?.statusCode ?? ''})');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: const Color(0xFFEF4444)));
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
- 
+
   @override
   Widget build(BuildContext context) => Container(
-        decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-            decoration: BoxDecoration(color: AppColors.primaryGreen, borderRadius: const BorderRadius.vertical(top: Radius.circular(20))),
+            decoration: BoxDecoration(
+                color: AppColors.primaryGreen,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(20))),
             child: Row(children: [
-              const Expanded(child: Text('Create Drawing Task', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700))),
-              GestureDetector(onTap: () => Navigator.pop(context), child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.close, color: Colors.white, size: 18))),
+              const Expanded(
+                  child: Text('Create Drawing Task',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700))),
+              GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(6)),
+                      child: const Icon(Icons.close,
+                          color: Colors.white, size: 18))),
             ]),
           ),
-          Flexible(child: SingleChildScrollView(
+          Flexible(
+              child: SingleChildScrollView(
             padding: const EdgeInsets.all(20),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Drawing Name', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Drawing Name',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151))),
               const SizedBox(height: 6),
-              TextField(controller: _nameCtrl, decoration: _inputDeco(hint: 'Enter drawing name'), style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B))),
+              TextField(
+                  controller: _nameCtrl,
+                  decoration: _inputDeco(hint: 'Enter drawing name'),
+                  style:
+                      const TextStyle(fontSize: 13, color: Color(0xFF1E293B))),
               const SizedBox(height: 14),
-              const Text('Description', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+              const Text('Description',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151))),
               const SizedBox(height: 6),
-              TextField(controller: _descCtrl, maxLines: 3, decoration: _inputDeco(hint: 'Enter description'), style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B))),
+              TextField(
+                  controller: _descCtrl,
+                  maxLines: 3,
+                  decoration: _inputDeco(hint: 'Enter description'),
+                  style:
+                      const TextStyle(fontSize: 13, color: Color(0xFF1E293B))),
               const SizedBox(height: 14),
-              const Text('Deadline', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+              const Text('Deadline',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151))),
               const SizedBox(height: 6),
               GestureDetector(
                 onTap: _pickDeadline,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-                  decoration: BoxDecoration(border: Border.all(color: const Color(0xFFD1D5DB)), borderRadius: BorderRadius.circular(8)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+                  decoration: BoxDecoration(
+                      border: Border.all(color: const Color(0xFFD1D5DB)),
+                      borderRadius: BorderRadius.circular(8)),
                   child: Row(children: [
-                    Expanded(child: Text(_fmtDeadline, style: TextStyle(fontSize: 14, color: _deadline == null ? const Color(0xFF9CA3AF) : const Color(0xFF1E293B)))),
-                    const Icon(Icons.calendar_today_outlined, size: 18, color: Color(0xFF6B7280)),
+                    Expanded(
+                        child: Text(_fmtDeadline,
+                            style: TextStyle(
+                                fontSize: 14,
+                                color: _deadline == null
+                                    ? const Color(0xFF9CA3AF)
+                                    : const Color(0xFF1E293B)))),
+                    const Icon(Icons.calendar_today_outlined,
+                        size: 18, color: Color(0xFF6B7280)),
                   ]),
                 ),
               ),
@@ -3059,35 +3635,75 @@ class _CreateDrawingDialogState extends State<_CreateDrawingDialog> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
             child: Row(children: [
-              Expanded(child: OutlinedButton(onPressed: _isSaving ? null : () => Navigator.pop(context), style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF374151), side: const BorderSide(color: Color(0xFFD1D5DB)), padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: const Text('Cancel', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)))),
+              Expanded(
+                  child: OutlinedButton(
+                      onPressed:
+                          _isSaving ? null : () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF374151),
+                          side: const BorderSide(color: Color(0xFFD1D5DB)),
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8))),
+                      child: const Text('Cancel',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w600)))),
               const SizedBox(width: 12),
-              Expanded(child: ElevatedButton(onPressed: _isSaving ? null : _submit, style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryGreen, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 13), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: _isSaving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Create', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)))),
+              Expanded(
+                  child: ElevatedButton(
+                      onPressed: _isSaving ? null : _submit,
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryGreen,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8))),
+                      child: _isSaving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Text('Create',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w600)))),
             ]),
           ),
         ]),
       );
- 
+
   InputDecoration _inputDeco({String? hint}) => InputDecoration(
-        hintText: hint, hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: AppColors.primaryGreen, width: 1.5)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        hintText: hint,
+        hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: AppColors.primaryGreen, width: 1.5)),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       );
 }
- 
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Create Report Task Dialog
 // ═══════════════════════════════════════════════════════════════════════════
- 
+
 class _CreateReportTaskDialog extends StatefulWidget {
   final int projectId;
   final Future<void> Function() onCreated;
-  const _CreateReportTaskDialog({required this.projectId, required this.onCreated});
+  const _CreateReportTaskDialog(
+      {required this.projectId, required this.onCreated});
   @override
-  State<_CreateReportTaskDialog> createState() => _CreateReportTaskDialogState();
+  State<_CreateReportTaskDialog> createState() =>
+      _CreateReportTaskDialogState();
 }
- 
+
 class _CreateReportTaskDialogState extends State<_CreateReportTaskDialog> {
   final _nameCtrl = TextEditingController();
   List<Map<String, dynamic>> _teams = [];
@@ -3095,32 +3711,47 @@ class _CreateReportTaskDialogState extends State<_CreateReportTaskDialog> {
   int? _selectedReviewTeam;
   bool _isLoading = true;
   bool _isSaving = false;
- 
+
   @override
-  void initState() { super.initState(); _loadTeams(); }
+  void initState() {
+    super.initState();
+    _loadTeams();
+  }
+
   @override
-  void dispose() { _nameCtrl.dispose(); super.dispose(); }
- 
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadTeams() async {
     try {
       final token = await AuthStorageService.getToken();
       if (token == null) return;
       final url = Uri.parse('${ApiConstants.baseUrl}/api/mobile/teams');
-      final response = await http.get(url, headers: {'Accept': 'application/json', 'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 20));
+      final response = await http.get(url, headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token'
+      }).timeout(const Duration(seconds: 20));
       if (!mounted) return;
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final body = jsonDecode(response.body);
         final raw = body['data'] ?? body['teams'] ?? [];
-        setState(() { _teams = List<Map<String, dynamic>>.from((raw as List).map((e) => Map<String, dynamic>.from(e))); });
+        setState(() {
+          _teams = List<Map<String, dynamic>>.from(
+              (raw as List).map((e) => Map<String, dynamic>.from(e)));
+        });
       }
     } catch (_) {}
     if (mounted) setState(() => _isLoading = false);
   }
- 
+
   Future<void> _submit() async {
     if (_isSaving) return;
     if (_nameCtrl.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a report name'), backgroundColor: Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Please enter a report name'),
+          backgroundColor: Color(0xFFEF4444)));
       return;
     }
     setState(() => _isSaving = true);
@@ -3128,93 +3759,219 @@ class _CreateReportTaskDialogState extends State<_CreateReportTaskDialog> {
       final token = await AuthStorageService.getToken();
       if (token == null) throw Exception('Session expired');
       final url = Uri.parse('${ApiConstants.baseUrl}/process/create');
-      final body = <String, dynamic>{'project_id': widget.projectId, 'process_name': _nameCtrl.text.trim(), 'stage': 'stage3_2'};
-      if (_selectedWorkingTeam != null) body['working_team'] = _selectedWorkingTeam;
-      if (_selectedReviewTeam != null) body['review_team'] = _selectedReviewTeam;
-      final response = await http.post(url, headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: jsonEncode(body)).timeout(const Duration(seconds: 30));
+      final body = <String, dynamic>{
+        'project_id': widget.projectId,
+        'process_name': _nameCtrl.text.trim(),
+        'stage': 'stage3_2'
+      };
+      if (_selectedWorkingTeam != null)
+        body['working_team'] = _selectedWorkingTeam;
+      if (_selectedReviewTeam != null)
+        body['review_team'] = _selectedReviewTeam;
+      final response = await http
+          .post(url,
+              headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $token'
+              },
+              body: jsonEncode(body))
+          .timeout(const Duration(seconds: 30));
       if (!mounted) return;
       dynamic decoded;
-      try { decoded = jsonDecode(response.body); } catch (_) { decoded = {'message': response.body}; }
+      try {
+        decoded = jsonDecode(response.body);
+      } catch (_) {
+        decoded = {'message': response.body};
+      }
       if (response.statusCode >= 200 && response.statusCode < 300) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text((decoded is Map ? decoded['message']?.toString() : null) ?? 'Report task created successfully'), backgroundColor: AppColors.primaryGreen));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                (decoded is Map ? decoded['message']?.toString() : null) ??
+                    'Report task created successfully'),
+            backgroundColor: AppColors.primaryGreen));
         await widget.onCreated();
       } else {
-        final msg = (decoded is Map ? decoded['message']?.toString() : null) ?? 'Failed to create report task';
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
+        final msg = (decoded is Map ? decoded['message']?.toString() : null) ??
+            'Failed to create report task';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: const Color(0xFFEF4444)));
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
- 
+
   @override
   Widget build(BuildContext context) => Container(
-        decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-            decoration: BoxDecoration(color: AppColors.primaryGreen, borderRadius: const BorderRadius.vertical(top: Radius.circular(20))),
+            decoration: BoxDecoration(
+                color: AppColors.primaryGreen,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(20))),
             child: Row(children: [
-              const Expanded(child: Text('Create Report Task', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700))),
-              GestureDetector(onTap: () => Navigator.pop(context), child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.close, color: Colors.white, size: 18))),
+              const Expanded(
+                  child: Text('Create Report Task',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700))),
+              GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(6)),
+                      child: const Icon(Icons.close,
+                          color: Colors.white, size: 18))),
             ]),
           ),
           if (_isLoading)
-            const Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator())
+            const Padding(
+                padding: EdgeInsets.all(40), child: CircularProgressIndicator())
           else
-            Flexible(child: SingleChildScrollView(
+            Flexible(
+                child: SingleChildScrollView(
               padding: const EdgeInsets.all(20),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Report Name', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-                const SizedBox(height: 6),
-                TextField(controller: _nameCtrl, decoration: _inputDeco(hint: 'Enter report name'), style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B))),
-                const SizedBox(height: 14),
-                const Text('Working Team', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-                const SizedBox(height: 6),
-                _teamDropdown(value: _selectedWorkingTeam, hint: 'Select team', onChanged: (v) => setState(() => _selectedWorkingTeam = v)),
-                const SizedBox(height: 14),
-                const Text('Review Team (Optional)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-                const SizedBox(height: 6),
-                _teamDropdown(value: _selectedReviewTeam, hint: 'Select review team (optional)', onChanged: (v) => setState(() => _selectedReviewTeam = v)),
-              ]),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Report Name',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151))),
+                    const SizedBox(height: 6),
+                    TextField(
+                        controller: _nameCtrl,
+                        decoration: _inputDeco(hint: 'Enter report name'),
+                        style: const TextStyle(
+                            fontSize: 13, color: Color(0xFF1E293B))),
+                    const SizedBox(height: 14),
+                    const Text('Working Team',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151))),
+                    const SizedBox(height: 6),
+                    _teamDropdown(
+                        value: _selectedWorkingTeam,
+                        hint: 'Select team',
+                        onChanged: (v) =>
+                            setState(() => _selectedWorkingTeam = v)),
+                    const SizedBox(height: 14),
+                    const Text('Review Team (Optional)',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151))),
+                    const SizedBox(height: 6),
+                    _teamDropdown(
+                        value: _selectedReviewTeam,
+                        hint: 'Select review team (optional)',
+                        onChanged: (v) =>
+                            setState(() => _selectedReviewTeam = v)),
+                  ]),
             )),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
             child: Row(children: [
-              Expanded(child: OutlinedButton(onPressed: _isSaving ? null : () => Navigator.pop(context), style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF374151), side: const BorderSide(color: Color(0xFFD1D5DB)), padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: const Text('Cancel', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)))),
+              Expanded(
+                  child: OutlinedButton(
+                      onPressed:
+                          _isSaving ? null : () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF374151),
+                          side: const BorderSide(color: Color(0xFFD1D5DB)),
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8))),
+                      child: const Text('Cancel',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w600)))),
               const SizedBox(width: 12),
-              Expanded(child: ElevatedButton(onPressed: _isSaving ? null : _submit, style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryGreen, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 13), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: _isSaving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Create Report', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)))),
+              Expanded(
+                  child: ElevatedButton(
+                      onPressed: _isSaving ? null : _submit,
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryGreen,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8))),
+                      child: _isSaving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Text('Create Report',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w600)))),
             ]),
           ),
         ]),
       );
- 
-  Widget _teamDropdown({required int? value, required String hint, required ValueChanged<int?> onChanged}) => Container(
+
+  Widget _teamDropdown(
+          {required int? value,
+          required String hint,
+          required ValueChanged<int?> onChanged}) =>
+      Container(
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(border: Border.all(color: const Color(0xFFD1D5DB)), borderRadius: BorderRadius.circular(8)),
-        child: DropdownButtonHideUnderline(child: DropdownButton<int>(
-          isExpanded: true, value: value,
+        decoration: BoxDecoration(
+            border: Border.all(color: const Color(0xFFD1D5DB)),
+            borderRadius: BorderRadius.circular(8)),
+        child: DropdownButtonHideUnderline(
+            child: DropdownButton<int>(
+          isExpanded: true,
+          value: value,
           hint: Text(hint, style: const TextStyle(color: Color(0xFF9CA3AF))),
           items: [
-            const DropdownMenuItem<int>(value: null, child: Text('None', style: TextStyle(color: Color(0xFF6B7280)))),
-            ..._teams.map((t) => DropdownMenuItem<int>(value: t['id'] as int?, child: Text(t['team_name']?.toString() ?? 'Team', style: const TextStyle(fontSize: 14, color: Color(0xFF1E293B))))),
+            const DropdownMenuItem<int>(
+                value: null,
+                child:
+                    Text('None', style: TextStyle(color: Color(0xFF6B7280)))),
+            ..._teams.map((t) => DropdownMenuItem<int>(
+                value: t['id'] as int?,
+                child: Text(t['team_name']?.toString() ?? 'Team',
+                    style: const TextStyle(
+                        fontSize: 14, color: Color(0xFF1E293B))))),
           ],
           onChanged: onChanged,
         )),
       );
- 
+
   InputDecoration _inputDeco({String? hint}) => InputDecoration(
-        hintText: hint, hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: AppColors.primaryGreen, width: 1.5)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        hintText: hint,
+        hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: AppColors.primaryGreen, width: 1.5)),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       );
 }
 
@@ -3323,31 +4080,24 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final body = jsonDecode(response.body);
         final raw = body['project'] ?? body['data'] ?? body;
-        final info =
-            raw['project_info'] ?? raw['projectInfo'] ?? {};
+        final info = raw['project_info'] ?? raw['projectInfo'] ?? {};
         _plotAreaCtrl.text = info['plot_area']?.toString() ?? '';
         _surveyNoCtrl.text = info['survey_no']?.toString() ?? '';
         _ownerNameCtrl.text = info['owner_name']?.toString() ?? '';
-        _ownershipType =
-            info['ownership_type']?.toString() ?? 'freehold';
+        _ownershipType = info['ownership_type']?.toString() ?? 'freehold';
         _deductionCtrl.text = info['deduction']?.toString() ?? '';
         _deductionCommentCtrl.text =
             info['deduction_comment']?.toString() ?? '';
         _locationCtrl.text = info['location']?.toString() ?? '';
-        _locationLinkCtrl.text =
-            info['location_link']?.toString() ?? '';
-        _fsiAvailableCtrl.text =
-            info['fsi_available']?.toString() ?? '';
+        _locationLinkCtrl.text = info['location_link']?.toString() ?? '';
+        _fsiAvailableCtrl.text = info['fsi_available']?.toString() ?? '';
         _fsiCommentCtrl.text = info['fsi_comment']?.toString() ?? '';
-        _existingInfo =
-            info['existing_info']?.toString() ?? 'regular';
-        _totalMembersCtrl.text =
-            info['total_members']?.toString() ?? '';
+        _existingInfo = info['existing_info']?.toString() ?? 'regular';
+        _totalMembersCtrl.text = info['total_members']?.toString() ?? '';
         _existingOwnershipDocs = _parseDocs(info['ownership_documents']);
         _existingSurveyDrawings = _parseDocs(info['survey_drawings']);
         _existingTitleSurveys = _parseDocs(info['title_surveys']);
-        final unitTypes =
-            info['unit_types'] ?? info['unitTypes'] ?? [];
+        final unitTypes = info['unit_types'] ?? info['unitTypes'] ?? [];
         if (unitTypes is List && unitTypes.isNotEmpty) {
           for (final row in _unitTypeRows) {
             row['type']!.dispose();
@@ -3370,7 +4120,8 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
         }
       }
     } catch (e) {
-      if (mounted) setState(() => _loadError = 'Could not load project info: $e');
+      if (mounted)
+        setState(() => _loadError = 'Could not load project info: $e');
     } finally {
       if (mounted) setState(() => _isLoadingInfo = false);
     }
@@ -3464,12 +4215,10 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
         unitIdx++;
       }
 
-      Future<void> addFiles(
-          String fieldName, List<PlatformFile> files) async {
+      Future<void> addFiles(String fieldName, List<PlatformFile> files) async {
         for (final f in files) {
           if (f.path == null) continue;
-          final mime =
-              lookupMimeType(f.path!) ?? 'application/octet-stream';
+          final mime = lookupMimeType(f.path!) ?? 'application/octet-stream';
           final parts = mime.split('/');
           request.files.add(await http.MultipartFile.fromPath(
             '$fieldName[]',
@@ -3483,7 +4232,8 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
       await addFiles('ownership_documents', _ownershipFiles);
       await addFiles('survey_drawings', _surveyDrawingFiles);
       await addFiles('title_surveys', _titleSurveyFiles);
-      final streamed = await request.send().timeout(const Duration(seconds: 60));
+      final streamed =
+          await request.send().timeout(const Duration(seconds: 60));
       final response = await http.Response.fromStream(streamed);
       if (!mounted) return;
       dynamic decoded;
@@ -3506,8 +4256,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
         await widget.onSaved();
         await _loadProjectInfo();
       } else {
-        String msg =
-            decoded['message']?.toString() ?? 'Failed to save';
+        String msg = decoded['message']?.toString() ?? 'Failed to save';
         if (decoded is Map && decoded['errors'] is Map) {
           final errs = decoded['errors'] as Map;
           msg = errs.values.first is List
@@ -3540,8 +4289,8 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-              color: AppColors.primaryGreen.withValues(alpha: 0.25)),
+          border:
+              Border.all(color: AppColors.primaryGreen.withValues(alpha: 0.25)),
           boxShadow: [
             BoxShadow(
                 color: Colors.black.withValues(alpha: 0.03),
@@ -3549,8 +4298,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                 offset: const Offset(0, 2))
           ],
         ),
-        child:
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
             child: Row(children: [
@@ -3564,8 +4312,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
             ]),
           ),
           Divider(
-              height: 1,
-              color: AppColors.primaryGreen.withValues(alpha: 0.15)),
+              height: 1, color: AppColors.primaryGreen.withValues(alpha: 0.15)),
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
             child: Column(
@@ -3587,21 +4334,17 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
   InputDecoration _inputDecoration({String? hint, Widget? suffix}) =>
       InputDecoration(
         hintText: hint,
-        hintStyle:
-            const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
+        hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
         suffixIcon: suffix,
         border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
-            borderSide:
-                const BorderSide(color: Color(0xFFD1D5DB))),
+            borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
         enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
-            borderSide:
-                const BorderSide(color: Color(0xFFD1D5DB))),
+            borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
         focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(
-                color: AppColors.primaryGreen, width: 1.5)),
+            borderSide: BorderSide(color: AppColors.primaryGreen, width: 1.5)),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       );
@@ -3624,8 +4367,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
         ),
       ]);
 
-  Widget _docList(
-      String title, List<Map<String, dynamic>> docs, String type) {
+  Widget _docList(String title, List<Map<String, dynamic>> docs, String type) {
     if (docs.isEmpty) return const SizedBox.shrink();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const SizedBox(height: 8),
@@ -3638,13 +4380,11 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
       ...docs.asMap().entries.map((e) {
         final idx = e.key;
         final doc = e.value;
-        final name =
-            doc['name']?.toString() ?? 'Document ${idx + 1}';
+        final name = doc['name']?.toString() ?? 'Document ${idx + 1}';
         final url = doc['url']?.toString() ?? '';
         return Container(
           margin: const EdgeInsets.only(bottom: 6),
-          padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
             color: const Color(0xFFF8FAFC),
             borderRadius: BorderRadius.circular(6),
@@ -3661,13 +4401,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                     overflow: TextOverflow.ellipsis)),
             if (url.isNotEmpty)
               GestureDetector(
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        FileViewerPage(url: url, title: name),
-                  ),
-                ),
+                onTap: () => _openDocumentUrl(context, url, name),
                 child: const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 6),
                   child: Icon(Icons.open_in_new,
@@ -3697,8 +4431,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
           final f = e.value;
           return Container(
             margin: const EdgeInsets.only(top: 6),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
               color: AppColors.primaryGreen.withValues(alpha: 0.06),
               borderRadius: BorderRadius.circular(6),
@@ -3715,10 +4448,9 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                           fontSize: 12, color: Color(0xFF1E293B)),
                       overflow: TextOverflow.ellipsis)),
               GestureDetector(
-                onTap: () =>
-                    setState(() => files.removeAt(idx)),
-                child: const Icon(Icons.close,
-                    size: 14, color: Color(0xFF94A3B8)),
+                onTap: () => setState(() => files.removeAt(idx)),
+                child:
+                    const Icon(Icons.close, size: 14, color: Color(0xFF94A3B8)),
               ),
             ]),
           );
@@ -3737,8 +4469,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
           onTap: onPick,
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(
-                horizontal: 12, vertical: 11),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
             decoration: BoxDecoration(
               border: Border.all(
                   color: AppColors.primaryGreen.withValues(alpha: 0.5)),
@@ -3757,8 +4488,8 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
               const Spacer(),
               if (files.isNotEmpty)
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 7, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                   decoration: BoxDecoration(
                     color: AppColors.primaryGreen,
                     borderRadius: BorderRadius.circular(10),
@@ -3793,71 +4524,69 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                Row(children: [
-                  Text('Unit Type ${idx + 1}',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.primaryGreen)),
-                  const Spacer(),
-                  if (_unitTypeRows.length > 1)
-                    GestureDetector(
-                      onTap: () => setState(() {
-                        row['type']!.dispose();
-                        row['number_of_units']!.dispose();
-                        row['carpet_area']!.dispose();
-                        row['__id']!.dispose();
-                        _unitTypeRows.removeAt(idx);
-                      }),
-                      child: const Icon(Icons.delete_outline,
-                          size: 16, color: Color(0xFFEF4444)),
-                    ),
-                ]),
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: row['type'],
-                  decoration:
-                      _inputDecoration(hint: 'Type (e.g. 1BHK, 2BHK)'),
-                  style: const TextStyle(
-                      fontSize: 13, color: Color(0xFF1E293B)),
-                ),
-                const SizedBox(height: 8),
-                Row(children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: row['number_of_units'],
-                      keyboardType: TextInputType.number,
-                      decoration: _inputDecoration(hint: 'No. of units'),
-                      style: const TextStyle(
-                          fontSize: 13, color: Color(0xFF1E293B)),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextFormField(
-                      controller: row['carpet_area'],
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true),
+                    Row(children: [
+                      Text('Unit Type ${idx + 1}',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.primaryGreen)),
+                      const Spacer(),
+                      if (_unitTypeRows.length > 1)
+                        GestureDetector(
+                          onTap: () => setState(() {
+                            row['type']!.dispose();
+                            row['number_of_units']!.dispose();
+                            row['carpet_area']!.dispose();
+                            row['__id']!.dispose();
+                            _unitTypeRows.removeAt(idx);
+                          }),
+                          child: const Icon(Icons.delete_outline,
+                              size: 16, color: Color(0xFFEF4444)),
+                        ),
+                    ]),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: row['type'],
                       decoration:
-                          _inputDecoration(hint: 'Carpet area (sq.m)'),
+                          _inputDecoration(hint: 'Type (e.g. 1BHK, 2BHK)'),
                       style: const TextStyle(
                           fontSize: 13, color: Color(0xFF1E293B)),
                     ),
-                  ),
-                ]),
-              ]),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: row['number_of_units'],
+                          keyboardType: TextInputType.number,
+                          decoration: _inputDecoration(hint: 'No. of units'),
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF1E293B)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          controller: row['carpet_area'],
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          decoration:
+                              _inputDecoration(hint: 'Carpet area (sq.m)'),
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF1E293B)),
+                        ),
+                      ),
+                    ]),
+                  ]),
             );
           }),
           const SizedBox(height: 4),
           GestureDetector(
             onTap: () => setState(() => _addUnitTypeRow()),
             child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 border: Border.all(
-                    color:
-                        AppColors.primaryGreen.withValues(alpha: 0.5)),
+                    color: AppColors.primaryGreen.withValues(alpha: 0.5)),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -3886,8 +4615,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
   Widget build(BuildContext context) {
     if (_isLoadingInfo) {
       return Center(
-          child: CircularProgressIndicator(
-              color: AppColors.primaryGreen));
+          child: CircularProgressIndicator(color: AppColors.primaryGreen));
     }
     if (_loadError != null) {
       return Center(
@@ -3899,8 +4627,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
             const SizedBox(height: 12),
             Text(_loadError!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
-                    color: Color(0xFF64748B), fontSize: 13)),
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 13)),
             const SizedBox(height: 12),
             ElevatedButton(
               onPressed: _loadProjectInfo,
@@ -3932,8 +4659,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                 const SizedBox(width: 10),
                 Expanded(
                     child: _textField(_surveyNoCtrl,
-                        label: 'Survey No.',
-                        hint: 'Survey number')),
+                        label: 'Survey No.', hint: 'Survey number')),
               ]),
               const SizedBox(height: 12),
               _textField(_ownerNameCtrl,
@@ -3945,26 +4671,24 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                   child: RadioListTile<String>(
                     contentPadding: EdgeInsets.zero,
                     dense: true,
-                    title: const Text('Leasehold',
-                        style: TextStyle(fontSize: 13)),
+                    title:
+                        const Text('Leasehold', style: TextStyle(fontSize: 13)),
                     value: 'leasehold',
                     groupValue: _ownershipType,
                     activeColor: AppColors.primaryGreen,
-                    onChanged: (v) =>
-                        setState(() => _ownershipType = v!),
+                    onChanged: (v) => setState(() => _ownershipType = v!),
                   ),
                 ),
                 Expanded(
                   child: RadioListTile<String>(
                     contentPadding: EdgeInsets.zero,
                     dense: true,
-                    title: const Text('Freehold',
-                        style: TextStyle(fontSize: 13)),
+                    title:
+                        const Text('Freehold', style: TextStyle(fontSize: 13)),
                     value: 'freehold',
                     groupValue: _ownershipType,
                     activeColor: AppColors.primaryGreen,
-                    onChanged: (v) =>
-                        setState(() => _ownershipType = v!),
+                    onChanged: (v) => setState(() => _ownershipType = v!),
                   ),
                 ),
               ]),
@@ -3974,22 +4698,20 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                   child: _textField(_deductionCtrl,
                       label: 'Deduction (sq. meters)',
                       hint: '0.00',
-                      type: const TextInputType.numberWithOptions(
-                          decimal: true)),
+                      type:
+                          const TextInputType.numberWithOptions(decimal: true)),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: _textField(_deductionCommentCtrl,
-                      label: 'Deduction Comment',
-                      hint: 'Comment',
-                      maxLines: 2),
+                      label: 'Deduction Comment', hint: 'Comment', maxLines: 2),
                 ),
               ]),
               if (_netArea != null) ...[
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: AppColors.primaryGreen.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(6),
@@ -4023,10 +4745,10 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                   child: TextFormField(
                     controller: _locationLinkCtrl,
                     keyboardType: TextInputType.url,
-                    style: const TextStyle(
-                        fontSize: 13, color: Color(0xFF1E293B)),
-                    decoration: _inputDecoration(
-                        hint: 'https://maps.google.com/...'),
+                    style:
+                        const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
+                    decoration:
+                        _inputDecoration(hint: 'https://maps.google.com/...'),
                   ),
                 ),
               ]),
@@ -4070,15 +4792,13 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                   child: _textField(_fsiAvailableCtrl,
                       label: 'FSI Available',
                       hint: '0.00',
-                      type: const TextInputType.numberWithOptions(
-                          decimal: true)),
+                      type:
+                          const TextInputType.numberWithOptions(decimal: true)),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: _textField(_fsiCommentCtrl,
-                      label: 'FSI Comment',
-                      hint: 'Comment',
-                      maxLines: 2),
+                      label: 'FSI Comment', hint: 'Comment', maxLines: 2),
                 ),
               ]),
             ],
@@ -4093,13 +4813,12 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                   child: RadioListTile<String>(
                     contentPadding: EdgeInsets.zero,
                     dense: true,
-                    title: const Text('Regular',
-                        style: TextStyle(fontSize: 13)),
+                    title:
+                        const Text('Regular', style: TextStyle(fontSize: 13)),
                     value: 'regular',
                     groupValue: _existingInfo,
                     activeColor: AppColors.primaryGreen,
-                    onChanged: (v) =>
-                        setState(() => _existingInfo = v!),
+                    onChanged: (v) => setState(() => _existingInfo = v!),
                   ),
                 ),
                 Expanded(
@@ -4111,8 +4830,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                     value: 'redevelopment',
                     groupValue: _existingInfo,
                     activeColor: AppColors.primaryGreen,
-                    onChanged: (v) =>
-                        setState(() => _existingInfo = v!),
+                    onChanged: (v) => setState(() => _existingInfo = v!),
                   ),
                 ),
               ]),
@@ -4137,8 +4855,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryGreen,
                 foregroundColor: Colors.white,
-                padding:
-                    const EdgeInsets.symmetric(vertical: 14),
+                padding: const EdgeInsets.symmetric(vertical: 14),
                 elevation: 0,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10)),
@@ -4150,9 +4867,8 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2.5, color: Colors.white))
                   : const Text('Save Project Information',
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700)),
+                      style:
+                          TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
             ),
           ),
         ],
@@ -4239,14 +4955,13 @@ class _AssignDialogState extends State<_AssignDialog> {
   Future<void> _pickDeadline() async {
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDeadline ??
-          DateTime.now().add(const Duration(days: 7)),
+      initialDate:
+          _selectedDeadline ?? DateTime.now().add(const Duration(days: 7)),
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
       builder: (ctx, child) => Theme(
         data: Theme.of(ctx).copyWith(
-            colorScheme:
-                ColorScheme.light(primary: AppColors.primaryGreen)),
+            colorScheme: ColorScheme.light(primary: AppColors.primaryGreen)),
         child: child!,
       ),
     );
@@ -4271,8 +4986,8 @@ class _AssignDialogState extends State<_AssignDialog> {
     try {
       final token = await AuthStorageService.getToken();
       if (token == null || token.isEmpty) throw Exception('Session expired.');
-      final url = Uri.parse(
-          '${ApiConstants.baseUrl}/api/mobile/process-tasks/assign');
+      final url =
+          Uri.parse('${ApiConstants.baseUrl}/api/mobile/process-tasks/assign');
       final body = <String, dynamic>{
         'project_id': widget.projectId,
         'process_id': widget.process.processId,
@@ -4312,13 +5027,11 @@ class _AssignDialogState extends State<_AssignDialog> {
         } catch (_) {
           decoded = {'message': response.body};
         }
-        final msg =
-            (decoded is Map ? decoded['message']?.toString() : null) ??
-                'Failed to assign (${response.statusCode})';
+        final msg = (decoded is Map ? decoded['message']?.toString() : null) ??
+            'Failed to assign (${response.statusCode})';
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(msg),
-              backgroundColor: const Color(0xFFEF4444)));
+              content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
         }
       }
     } catch (e) {
@@ -4386,8 +5099,7 @@ class _AssignDialogState extends State<_AssignDialog> {
             const SizedBox(width: 12),
             const Expanded(
                 child: Text('Loading team members…',
-                    style: TextStyle(
-                        fontSize: 14, color: Color(0xFF6B7280)))),
+                    style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)))),
           ]));
     }
     if (_membersError != null) {
@@ -4395,8 +5107,7 @@ class _AssignDialogState extends State<_AssignDialog> {
           color: const Color(0xFFFFE4E6),
           borderColor: const Color(0xFFEF4444),
           child: Row(children: [
-            const Icon(Icons.error_outline,
-                size: 16, color: Color(0xFFEF4444)),
+            const Icon(Icons.error_outline, size: 16, color: Color(0xFFEF4444)),
             const SizedBox(width: 8),
             Expanded(
                 child: Text(_membersError!,
@@ -4420,25 +5131,21 @@ class _AssignDialogState extends State<_AssignDialog> {
       return _stateShell(
           color: const Color(0xFFF9FAFB),
           child: const Row(children: [
-            Icon(Icons.group_off_outlined,
-                size: 16, color: Color(0xFF9CA3AF)),
+            Icon(Icons.group_off_outlined, size: 16, color: Color(0xFF9CA3AF)),
             SizedBox(width: 8),
             Text('No team assigned to this process',
-                style: TextStyle(
-                    fontSize: 14, color: Color(0xFF9CA3AF))),
+                style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
           ]));
     }
     if (_members.isEmpty) {
       return _stateShell(
           color: const Color(0xFFF9FAFB),
           child: const Row(children: [
-            Icon(Icons.person_off_outlined,
-                size: 16, color: Color(0xFF9CA3AF)),
+            Icon(Icons.person_off_outlined, size: 16, color: Color(0xFF9CA3AF)),
             SizedBox(width: 8),
             Expanded(
                 child: Text('No assignable team members found',
-                    style: TextStyle(
-                        fontSize: 14, color: Color(0xFF9CA3AF)))),
+                    style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF)))),
           ]));
     }
     return Container(
@@ -4450,8 +5157,7 @@ class _AssignDialogState extends State<_AssignDialog> {
                 : AppColors.primaryGreen,
             width: 1.5),
         borderRadius: BorderRadius.circular(8),
-        color:
-            _isNotApplicable ? const Color(0xFFF9FAFB) : Colors.white,
+        color: _isNotApplicable ? const Color(0xFFF9FAFB) : Colors.white,
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<TeamMemberModel>(
@@ -4495,18 +5201,14 @@ class _AssignDialogState extends State<_AssignDialog> {
   }
 
   Widget _stateShell(
-          {required Color color,
-          Color? borderColor,
-          required Widget child}) =>
+          {required Color color, Color? borderColor, required Widget child}) =>
       Container(
         width: double.infinity,
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
         decoration: BoxDecoration(
           color: color,
           border: Border.all(
-              color: borderColor ?? const Color(0xFFE5E7EB),
-              width: 1.5),
+              color: borderColor ?? const Color(0xFFE5E7EB), width: 1.5),
           borderRadius: BorderRadius.circular(8),
         ),
         child: child,
@@ -4517,8 +5219,7 @@ class _AssignDialogState extends State<_AssignDialog> {
     return Container(
       decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius:
-              BorderRadius.vertical(top: Radius.circular(20))),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       padding:
           EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -4528,27 +5229,26 @@ class _AssignDialogState extends State<_AssignDialog> {
                   colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
                   begin: Alignment.centerLeft,
                   end: Alignment.centerRight),
-              borderRadius:
-                  BorderRadius.vertical(top: Radius.circular(20))),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
           child: Row(children: [
             Expanded(
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-              const Text('Assign Process',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700)),
-              const SizedBox(height: 2),
-              Text(widget.process.processName,
-                  style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.8),
-                      fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
-            ])),
+                  const Text('Assign Process',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(widget.process.processName,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ])),
             GestureDetector(
               onTap: () => Navigator.pop(context),
               child: Container(
@@ -4556,8 +5256,7 @@ class _AssignDialogState extends State<_AssignDialog> {
                 decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(6)),
-                child: const Icon(Icons.close,
-                    color: Colors.white, size: 18),
+                child: const Icon(Icons.close, color: Colors.white, size: 18),
               ),
             ),
           ]),
@@ -4565,9 +5264,8 @@ class _AssignDialogState extends State<_AssignDialog> {
         Flexible(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Deadline Date',
                   style: TextStyle(
                       fontSize: 12,
@@ -4577,11 +5275,10 @@ class _AssignDialogState extends State<_AssignDialog> {
               GestureDetector(
                 onTap: _isNotApplicable ? null : _pickDeadline,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 13),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
                   decoration: BoxDecoration(
-                      border: Border.all(
-                          color: const Color(0xFFD1D5DB)),
+                      border: Border.all(color: const Color(0xFFD1D5DB)),
                       borderRadius: BorderRadius.circular(8),
                       color: _isNotApplicable
                           ? const Color(0xFFF9FAFB)
@@ -4616,11 +5313,10 @@ class _AssignDialogState extends State<_AssignDialog> {
                 if (_members.isNotEmpty) ...[
                   const SizedBox(width: 8),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 7, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                     decoration: BoxDecoration(
-                        color: AppColors.primaryGreen
-                            .withValues(alpha: 0.1),
+                        color: AppColors.primaryGreen.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(10)),
                     child: Text(
                         '${_members.length} member${_members.length == 1 ? '' : 's'}',
@@ -4655,26 +5351,23 @@ class _AssignDialogState extends State<_AssignDialog> {
                     child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                  Text('Not Applicable',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF374151))),
-                  SizedBox(height: 2),
-                  Text(
-                      'Check this if this process is not applicable for this project.',
-                      style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF9CA3AF))),
-                ])),
+                      Text('Not Applicable',
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF374151))),
+                      SizedBox(height: 2),
+                      Text(
+                          'Check this if this process is not applicable for this project.',
+                          style: TextStyle(
+                              fontSize: 11, color: Color(0xFF9CA3AF))),
+                    ])),
               ]),
               const SizedBox(height: 16),
-              if (widget.teamName != null &&
-                  widget.teamName!.isNotEmpty) ...[
+              if (widget.teamName != null && widget.teamName!.isNotEmpty) ...[
                 Row(children: [
                   const Text('Working team: ',
-                      style: TextStyle(
-                          fontSize: 12, color: Color(0xFF6B7280))),
+                      style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
                   _teamPill(),
                 ]),
                 const SizedBox(height: 16),
@@ -4687,18 +5380,16 @@ class _AssignDialogState extends State<_AssignDialog> {
           child: Row(children: [
             Expanded(
               child: OutlinedButton(
-                onPressed:
-                    _isSaving ? null : () => Navigator.pop(context),
+                onPressed: _isSaving ? null : () => Navigator.pop(context),
                 style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFF374151),
                     side: const BorderSide(color: Color(0xFFD1D5DB)),
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 13),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8))),
                 child: const Text('Cancel',
-                    style: TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600)),
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               ),
             ),
             const SizedBox(width: 12),
@@ -4708,8 +5399,7 @@ class _AssignDialogState extends State<_AssignDialog> {
                 style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     foregroundColor: Colors.white,
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 13),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8))),
@@ -4721,8 +5411,7 @@ class _AssignDialogState extends State<_AssignDialog> {
                             strokeWidth: 2, color: Colors.white))
                     : const Text('Assign',
                         style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600)),
+                            fontSize: 14, fontWeight: FontWeight.w600)),
               ),
             ),
           ]),
@@ -4741,18 +5430,18 @@ class _UploadDialog extends StatefulWidget {
   final int projectId;
   final int currentUserId;
   final Future<void> Function() onUploaded;
- 
+
   const _UploadDialog({
     required this.process,
     required this.projectId,
     required this.currentUserId,
     required this.onUploaded,
   });
- 
+
   @override
   State<_UploadDialog> createState() => _UploadDialogState();
 }
- 
+
 class _UploadDialogState extends State<_UploadDialog> {
   String _uploadType = 'drive_link';
   final _driveLinkCtrl = TextEditingController();
@@ -4760,13 +5449,13 @@ class _UploadDialogState extends State<_UploadDialog> {
   bool _isSaving = false;
   PlatformFile? _pickedFile;
   bool _isPickingFile = false;
- 
+
   @override
   void dispose() {
     _driveLinkCtrl.dispose();
     super.dispose();
   }
- 
+
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -4781,14 +5470,23 @@ class _UploadDialogState extends State<_UploadDialog> {
     );
     if (picked != null && mounted) setState(() => _uploadedDate = picked);
   }
- 
+
   Future<void> _pickFile() async {
     if (_isPickingFile) return;
     setState(() => _isPickingFile = true);
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'xls', 'xlsx'],
+        allowedExtensions: [
+          'pdf',
+          'doc',
+          'docx',
+          'jpg',
+          'jpeg',
+          'png',
+          'xls',
+          'xlsx'
+        ],
         withData: false,
       );
       if (!mounted) return;
@@ -4804,17 +5502,17 @@ class _UploadDialogState extends State<_UploadDialog> {
       if (mounted) setState(() => _isPickingFile = false);
     }
   }
- 
+
   String get _formattedDate =>
       '${_uploadedDate.day.toString().padLeft(2, '0')}/${_uploadedDate.month.toString().padLeft(2, '0')}/${_uploadedDate.year}';
- 
+
   String get _isoDate =>
       '${_uploadedDate.year}-${_uploadedDate.month.toString().padLeft(2, '0')}-${_uploadedDate.day.toString().padLeft(2, '0')}';
- 
+
   // ── Submit ──────────────────────────────────────────────────────────────
   Future<void> _submit() async {
     if (_isSaving) return;
- 
+
     if (_uploadType == 'drive_link' && _driveLinkCtrl.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Please enter a Google Drive link'),
@@ -4827,18 +5525,19 @@ class _UploadDialogState extends State<_UploadDialog> {
           backgroundColor: Color(0xFFEF4444)));
       return;
     }
- 
+
     setState(() => _isSaving = true);
- 
+
     try {
       final token = await AuthStorageService.getToken();
       if (token == null || token.isEmpty) throw Exception('Session expired.');
- 
+
       // ── Mobile upload endpoint (/api/mobile/process-tasks/upload) ─────
-      final uploadUrl = '${ApiConstants.baseUrl}/api/mobile/process-tasks/upload';
- 
+      final uploadUrl =
+          '${ApiConstants.baseUrl}/api/mobile/process-tasks/upload';
+
       http.Response response;
- 
+
       if (_uploadType == 'drive_link') {
         response = await http
             .post(
@@ -4849,38 +5548,39 @@ class _UploadDialogState extends State<_UploadDialog> {
                 'Authorization': 'Bearer $token',
               },
               body: jsonEncode({
-                'project_id':    widget.projectId,
-                'process_id':    widget.process.processId,
-                'upload_type':   'drive_link',
+                'project_id': widget.projectId,
+                'process_id': widget.process.processId,
+                'upload_type': 'drive_link',
                 'uploaded_date': _isoDate,
-                'drive_link':    _driveLinkCtrl.text.trim(),
+                'drive_link': _driveLinkCtrl.text.trim(),
               }),
             )
             .timeout(const Duration(seconds: 30));
       } else {
         final filePath = _pickedFile!.path;
         if (filePath == null) throw Exception('File path is null');
- 
-        final mimeType  = lookupMimeType(filePath) ?? 'application/octet-stream';
+
+        final mimeType = lookupMimeType(filePath) ?? 'application/octet-stream';
         final mimeParts = mimeType.split('/');
- 
+
         final request = http.MultipartRequest('POST', Uri.parse(uploadUrl))
           ..headers['Authorization'] = 'Bearer $token'
           ..headers['Accept'] = 'application/json'
-          ..fields['project_id']    = widget.projectId.toString()
-          ..fields['process_id']    = widget.process.processId.toString()
-          ..fields['upload_type']   = 'file'
+          ..fields['project_id'] = widget.projectId.toString()
+          ..fields['process_id'] = widget.process.processId.toString()
+          ..fields['upload_type'] = 'file'
           ..fields['uploaded_date'] = _isoDate
           ..files.add(await http.MultipartFile.fromPath(
             'file',
             filePath,
             contentType: MediaType(mimeParts[0], mimeParts[1]),
           ));
- 
-        final streamed = await request.send().timeout(const Duration(seconds: 60));
+
+        final streamed =
+            await request.send().timeout(const Duration(seconds: 60));
         response = await http.Response.fromStream(streamed);
       }
- 
+
       if (!mounted) return;
       await _handleResponse(response);
     } catch (e) {
@@ -4892,14 +5592,20 @@ class _UploadDialogState extends State<_UploadDialog> {
       if (mounted) setState(() => _isSaving = false);
     }
   }
- 
+
   Future<void> _handleResponse(http.Response response) async {
     dynamic decoded;
-    try { decoded = jsonDecode(response.body); } catch (_) { decoded = {}; }
- 
+    try {
+      decoded = jsonDecode(response.body);
+    } catch (_) {
+      decoded = {};
+    }
+
     final success = (response.statusCode >= 200 && response.statusCode < 300) &&
-        (decoded is Map ? (decoded['status'] == true || decoded['success'] == true) : true);
- 
+        (decoded is Map
+            ? (decoded['status'] == true || decoded['success'] == true)
+            : true);
+
     if (success) {
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -4917,28 +5623,33 @@ class _UploadDialogState extends State<_UploadDialog> {
           content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
     }
   }
- 
+
   // ── Helpers ─────────────────────────────────────────────────────────────
   IconData _fileIcon(String? ext) {
     switch (ext?.toLowerCase()) {
-      case 'pdf':  return Icons.picture_as_pdf_outlined;
+      case 'pdf':
+        return Icons.picture_as_pdf_outlined;
       case 'doc':
-      case 'docx': return Icons.description_outlined;
+      case 'docx':
+        return Icons.description_outlined;
       case 'xls':
-      case 'xlsx': return Icons.table_chart_outlined;
+      case 'xlsx':
+        return Icons.table_chart_outlined;
       case 'jpg':
       case 'jpeg':
-      case 'png':  return Icons.image_outlined;
-      default:     return Icons.insert_drive_file_outlined;
+      case 'png':
+        return Icons.image_outlined;
+      default:
+        return Icons.insert_drive_file_outlined;
     }
   }
- 
+
   String _formatFileSize(int bytes) {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
- 
+
   Widget _typeChip({
     required String label,
     required IconData icon,
@@ -4953,24 +5664,27 @@ class _UploadDialogState extends State<_UploadDialog> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color:  selected ? AppColors.primaryGreen : const Color(0xFFF1F5F9),
+          color: selected ? AppColors.primaryGreen : const Color(0xFFF1F5F9),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-              color: selected ? AppColors.primaryGreen : const Color(0xFFE2E8F0)),
+              color:
+                  selected ? AppColors.primaryGreen : const Color(0xFFE2E8F0)),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 14,
+          Icon(icon,
+              size: 14,
               color: selected ? Colors.white : const Color(0xFF64748B)),
           const SizedBox(width: 6),
           Text(label,
               style: TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
                   color: selected ? Colors.white : const Color(0xFF374151))),
         ]),
       ),
     );
   }
- 
+
   // ── Build ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -4978,7 +5692,8 @@ class _UploadDialogState extends State<_UploadDialog> {
       decoration: const BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding:
+          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         // ── Header ────────────────────────────────────────────────────────
         Container(
@@ -4989,15 +5704,25 @@ class _UploadDialogState extends State<_UploadDialog> {
               borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
           child: Row(children: [
             Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(widget.process.hasFile ? 'Reupload Document' : 'Upload Document',
-                  style: const TextStyle(
-                      color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 2),
-              Text(widget.process.processName,
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-            ])),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(
+                      widget.process.hasFile
+                          ? 'Reupload Document'
+                          : 'Upload Document',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(widget.process.processName,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ])),
             GestureDetector(
               onTap: () => Navigator.pop(context),
               child: Container(
@@ -5010,13 +5735,13 @@ class _UploadDialogState extends State<_UploadDialog> {
             ),
           ]),
         ),
- 
+
         // ── Body ──────────────────────────────────────────────────────────
         Flexible(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(20),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
- 
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Info banner
               Container(
                 padding: const EdgeInsets.all(12),
@@ -5036,31 +5761,42 @@ class _UploadDialogState extends State<_UploadDialog> {
                 ]),
               ),
               const SizedBox(height: 16),
- 
+
               // Upload type chips
               const Text('Upload Type',
                   style: TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151))),
               const SizedBox(height: 8),
               Row(children: [
-                _typeChip(label: 'Drive Link', icon: Icons.link_rounded,       value: 'drive_link'),
+                _typeChip(
+                    label: 'Drive Link',
+                    icon: Icons.link_rounded,
+                    value: 'drive_link'),
                 const SizedBox(width: 10),
-                _typeChip(label: 'Upload File', icon: Icons.upload_file_outlined, value: 'file'),
+                _typeChip(
+                    label: 'Upload File',
+                    icon: Icons.upload_file_outlined,
+                    value: 'file'),
               ]),
               const SizedBox(height: 16),
- 
+
               // Drive link field
               if (_uploadType == 'drive_link') ...[
                 const Text('Google Drive Link',
                     style: TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151))),
                 const SizedBox(height: 6),
                 TextField(
                   controller: _driveLinkCtrl,
                   keyboardType: TextInputType.url,
                   decoration: InputDecoration(
                     hintText: 'https://drive.google.com/file/d/...',
-                    hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
+                    hintStyle:
+                        const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
                     border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                         borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
@@ -5069,18 +5805,23 @@ class _UploadDialogState extends State<_UploadDialog> {
                         borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
                     focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: AppColors.primaryGreen, width: 1.5)),
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                    prefixIcon: const Icon(Icons.link_rounded, size: 18, color: Color(0xFF94A3B8)),
+                        borderSide: BorderSide(
+                            color: AppColors.primaryGreen, width: 1.5)),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
+                    prefixIcon: const Icon(Icons.link_rounded,
+                        size: 18, color: Color(0xFF94A3B8)),
                   ),
-                  style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
+                  style:
+                      const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
                 ),
               ] else ...[
                 // File picker
                 const Text('Select File',
                     style: TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151))),
                 const SizedBox(height: 6),
                 GestureDetector(
                   onTap: _isPickingFile ? null : _pickFile,
@@ -5100,15 +5841,18 @@ class _UploadDialogState extends State<_UploadDialog> {
                     child: _isPickingFile
                         ? Center(
                             child: SizedBox(
-                                width: 24, height: 24,
+                                width: 24,
+                                height: 24,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: AppColors.primaryGreen)))
+                                    strokeWidth: 2,
+                                    color: AppColors.primaryGreen)))
                         : _pickedFile != null
                             ? Row(children: [
                                 Container(
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
-                                      color: AppColors.primaryGreen.withValues(alpha: 0.12),
+                                      color: AppColors.primaryGreen
+                                          .withValues(alpha: 0.12),
                                       borderRadius: BorderRadius.circular(6)),
                                   child: Icon(_fileIcon(_pickedFile!.extension),
                                       color: AppColors.primaryGreen, size: 20),
@@ -5116,21 +5860,26 @@ class _UploadDialogState extends State<_UploadDialog> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                     child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
-                                  Text(_pickedFile!.name,
-                                      style: const TextStyle(
-                                          fontSize: 13, fontWeight: FontWeight.w600,
-                                          color: Color(0xFF1E293B)),
-                                      overflow: TextOverflow.ellipsis),
-                                  const SizedBox(height: 2),
-                                  Text(_formatFileSize(_pickedFile!.size),
-                                      style: const TextStyle(
-                                          fontSize: 11, color: Color(0xFF94A3B8))),
-                                ])),
+                                      Text(_pickedFile!.name,
+                                          style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                              color: Color(0xFF1E293B)),
+                                          overflow: TextOverflow.ellipsis),
+                                      const SizedBox(height: 2),
+                                      Text(_formatFileSize(_pickedFile!.size),
+                                          style: const TextStyle(
+                                              fontSize: 11,
+                                              color: Color(0xFF94A3B8))),
+                                    ])),
                                 GestureDetector(
-                                  onTap: () => setState(() => _pickedFile = null),
-                                  child: const Icon(Icons.close, size: 18, color: Color(0xFF94A3B8)),
+                                  onTap: () =>
+                                      setState(() => _pickedFile = null),
+                                  child: const Icon(Icons.close,
+                                      size: 18, color: Color(0xFF94A3B8)),
                                 ),
                               ])
                             : Column(children: [
@@ -5140,26 +5889,33 @@ class _UploadDialogState extends State<_UploadDialog> {
                                 Text('Tap to select file',
                                     style: TextStyle(
                                         color: AppColors.primaryGreen,
-                                        fontWeight: FontWeight.w600, fontSize: 13)),
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13)),
                                 const SizedBox(height: 4),
-                                const Text('PDF, DOC, DOCX, XLS, XLSX, JPG, PNG',
-                                    style: TextStyle(color: Color(0xFF94A3AF), fontSize: 11)),
+                                const Text(
+                                    'PDF, DOC, DOCX, XLS, XLSX, JPG, PNG',
+                                    style: TextStyle(
+                                        color: Color(0xFF94A3AF),
+                                        fontSize: 11)),
                               ]),
                   ),
                 ),
               ],
- 
+
               const SizedBox(height: 16),
- 
+
               // Date picker
               const Text('Upload Date',
                   style: TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151))),
               const SizedBox(height: 6),
               GestureDetector(
                 onTap: _pickDate,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
                   decoration: BoxDecoration(
                       border: Border.all(color: const Color(0xFFD1D5DB)),
                       borderRadius: BorderRadius.circular(8),
@@ -5167,8 +5923,10 @@ class _UploadDialogState extends State<_UploadDialog> {
                   child: Row(children: [
                     Expanded(
                         child: Text(_formattedDate,
-                            style: const TextStyle(fontSize: 14, color: Color(0xFF1E293B)))),
-                    const Icon(Icons.calendar_today_outlined, size: 18, color: Color(0xFF6B7280)),
+                            style: const TextStyle(
+                                fontSize: 14, color: Color(0xFF1E293B)))),
+                    const Icon(Icons.calendar_today_outlined,
+                        size: 18, color: Color(0xFF6B7280)),
                   ]),
                 ),
               ),
@@ -5176,7 +5934,7 @@ class _UploadDialogState extends State<_UploadDialog> {
             ]),
           ),
         ),
- 
+
         // ── Footer buttons ────────────────────────────────────────────────
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
@@ -5188,9 +5946,11 @@ class _UploadDialogState extends State<_UploadDialog> {
                     foregroundColor: const Color(0xFF374151),
                     side: const BorderSide(color: Color(0xFFD1D5DB)),
                     padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8))),
                 child: const Text('Cancel',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               ),
             ),
             const SizedBox(width: 12),
@@ -5199,17 +5959,21 @@ class _UploadDialogState extends State<_UploadDialog> {
                 onPressed: _isSaving ? null : _submit,
                 icon: _isSaving
                     ? const SizedBox(
-                        width: 16, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.upload_rounded, size: 16),
                 label: Text(_isSaving ? 'Uploading…' : 'Submit',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600)),
                 style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     elevation: 0,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8))),
               ),
             ),
           ]),
@@ -5227,8 +5991,7 @@ class _EmailDialog extends StatefulWidget {
   final ProcessListItemModel process;
   final int projectId;
 
-  const _EmailDialog(
-      {required this.process, required this.projectId});
+  const _EmailDialog({required this.process, required this.projectId});
 
   @override
   State<_EmailDialog> createState() => _EmailDialogState();
@@ -5253,100 +6016,98 @@ class _EmailDialogState extends State<_EmailDialog> {
   }
 
   Future<void> _send() async {
-  if (_isSending) return;
+    if (_isSending) return;
 
-  if (_selectedRecipients.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Please select at least one recipient'),
-      backgroundColor: Color(0xFFEF4444),
-    ));
-    return;
-  }
-
-  if (widget.process.filePath == null || widget.process.filePath!.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('No file uploaded for this process yet'),
-      backgroundColor: Color(0xFFEF4444),
-    ));
-    return;
-  }
-
-  setState(() => _isSending = true);
-
-  try {
-    final token = await AuthStorageService.getToken();
-    if (token == null || token.isEmpty) throw Exception('Session expired.');
-
-    final url = Uri.parse('${ApiConstants.baseUrl}/send-email');
-
-    final response = await http
-        .post(
-          url,
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $token',
-          },
-          body: jsonEncode({
-            'project_id': widget.projectId,
-            'process_id': widget.process.processId,
-            'file_path': widget.process.filePath,
-            'recipients': _selectedRecipients.toList(),
-            'note': _noteCtrl.text.trim(),
-          }),
-        )
-        .timeout(const Duration(seconds: 30));
-
-    if (!mounted) return;
-
-    dynamic decoded;
-    try {
-      decoded = jsonDecode(response.body);
-    } catch (_) {
-      decoded = {'message': response.body};
+    if (_selectedRecipients.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Please select at least one recipient'),
+        backgroundColor: Color(0xFFEF4444),
+      ));
+      return;
     }
 
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      final success = decoded is Map ? (decoded['success'] == true) : true;
-
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          (decoded is Map ? decoded['text']?.toString() : null) ??
-              (success ? 'Email sent successfully' : 'Email failed'),
-        ),
-        backgroundColor:
-            success ? AppColors.primaryGreen : const Color(0xFFEF4444),
+    if (widget.process.filePath == null || widget.process.filePath!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('No file uploaded for this process yet'),
+        backgroundColor: Color(0xFFEF4444),
       ));
-    } else {
-      final msg =
-          (decoded is Map ? decoded['text']?.toString() : null) ??
-              (decoded is Map ? decoded['message']?.toString() : null) ??
-              'Failed to send email (${response.statusCode})';
+      return;
+    }
 
+    setState(() => _isSending = true);
+
+    try {
+      final token = await AuthStorageService.getToken();
+      if (token == null || token.isEmpty) throw Exception('Session expired.');
+
+      final url = Uri.parse('${ApiConstants.baseUrl}/send-email');
+
+      final response = await http
+          .post(
+            url,
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              'project_id': widget.projectId,
+              'process_id': widget.process.processId,
+              'file_path': widget.process.filePath,
+              'recipients': _selectedRecipients.toList(),
+              'note': _noteCtrl.text.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+
+      if (!mounted) return;
+
+      dynamic decoded;
+      try {
+        decoded = jsonDecode(response.body);
+      } catch (_) {
+        decoded = {'message': response.body};
+      }
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final success = decoded is Map ? (decoded['success'] == true) : true;
+
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            (decoded is Map ? decoded['text']?.toString() : null) ??
+                (success ? 'Email sent successfully' : 'Email failed'),
+          ),
+          backgroundColor:
+              success ? AppColors.primaryGreen : const Color(0xFFEF4444),
+        ));
+      } else {
+        final msg = (decoded is Map ? decoded['text']?.toString() : null) ??
+            (decoded is Map ? decoded['message']?.toString() : null) ??
+            'Failed to send email (${response.statusCode})';
+
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(msg),
+          backgroundColor: const Color(0xFFEF4444),
+        ));
+      }
+    } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(msg),
+        content: Text('Error: $e'),
         backgroundColor: const Color(0xFFEF4444),
       ));
+    } finally {
+      if (mounted) setState(() => _isSending = false);
     }
-  } catch (e) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('Error: $e'),
-      backgroundColor: const Color(0xFFEF4444),
-    ));
-  } finally {
-    if (mounted) setState(() => _isSending = false);
   }
-}
 
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius:
-              BorderRadius.vertical(top: Radius.circular(20))),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       padding:
           EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -5355,26 +6116,25 @@ class _EmailDialogState extends State<_EmailDialog> {
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
           decoration: const BoxDecoration(
               color: Color(0xFF1E293B),
-              borderRadius:
-                  BorderRadius.vertical(top: Radius.circular(20))),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
           child: Row(children: [
             Expanded(
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-              const Text('Send Mail',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700)),
-              const SizedBox(height: 2),
-              Text(widget.process.processName,
-                  style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.7),
-                      fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
-            ])),
+                  const Text('Send Mail',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(widget.process.processName,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ])),
             GestureDetector(
               onTap: () => Navigator.pop(context),
               child: Container(
@@ -5382,8 +6142,7 @@ class _EmailDialogState extends State<_EmailDialog> {
                 decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(6)),
-                child: const Icon(Icons.close,
-                    color: Colors.white, size: 18),
+                child: const Icon(Icons.close, color: Colors.white, size: 18),
               ),
             ),
           ]),
@@ -5391,9 +6150,8 @@ class _EmailDialogState extends State<_EmailDialog> {
         Flexible(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(20),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (widget.process.filePath != null &&
                   widget.process.filePath!.isNotEmpty) ...[
                 Container(
@@ -5401,8 +6159,7 @@ class _EmailDialogState extends State<_EmailDialog> {
                   decoration: BoxDecoration(
                       color: const Color(0xFFF0FDF4),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                          color: const Color(0xFFBBF7D0))),
+                      border: Border.all(color: const Color(0xFFBBF7D0))),
                   child: Row(children: [
                     const Icon(Icons.insert_drive_file_outlined,
                         size: 16, color: Color(0xFF22C55E)),
@@ -5410,8 +6167,7 @@ class _EmailDialogState extends State<_EmailDialog> {
                     Expanded(
                         child: Text(widget.process.filePath!,
                             style: const TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF166534)),
+                                fontSize: 11, color: Color(0xFF166534)),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis)),
                   ]),
@@ -5423,18 +6179,15 @@ class _EmailDialogState extends State<_EmailDialog> {
                   decoration: BoxDecoration(
                       color: const Color(0xFFFFF7ED),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                          color: const Color(0xFFFED7AA))),
+                      border: Border.all(color: const Color(0xFFFED7AA))),
                   child: const Row(children: [
                     Icon(Icons.warning_amber_rounded,
                         size: 16, color: Color(0xFFF97316)),
                     SizedBox(width: 8),
                     Expanded(
-                        child: Text(
-                            'No file uploaded yet.',
+                        child: Text('No file uploaded yet.',
                             style: TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF9A3412)))),
+                                fontSize: 11, color: Color(0xFF9A3412)))),
                   ]),
                 ),
                 const SizedBox(height: 16),
@@ -5446,16 +6199,14 @@ class _EmailDialogState extends State<_EmailDialog> {
                       color: Color(0xFF374151))),
               const SizedBox(height: 4),
               const Text('Select who should receive this email',
-                  style: TextStyle(
-                      fontSize: 11, color: Color(0xFF9CA3AF))),
+                  style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
               const SizedBox(height: 10),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: _recipientOptions.map((opt) {
                   final val = opt['value']!;
-                  final selected =
-                      _selectedRecipients.contains(val);
+                  final selected = _selectedRecipients.contains(val);
                   return GestureDetector(
                     onTap: () => setState(() {
                       if (selected) {
@@ -5477,9 +6228,7 @@ class _EmailDialogState extends State<_EmailDialog> {
                                 ? const Color(0xFF1E293B)
                                 : const Color(0xFFE2E8F0)),
                       ),
-                      child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
                         Icon(
                             selected
                                 ? Icons.check_circle_rounded
@@ -5513,25 +6262,22 @@ class _EmailDialogState extends State<_EmailDialog> {
                 maxLines: 3,
                 decoration: InputDecoration(
                   hintText: 'Add an optional note…',
-                  hintStyle: const TextStyle(
-                      fontSize: 13, color: Color(0xFFCBD5E1)),
+                  hintStyle:
+                      const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
                   border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(
-                          color: Color(0xFFE2E8F0))),
+                      borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
                   enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(
-                          color: Color(0xFFE2E8F0))),
+                      borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
                   focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
                       borderSide: const BorderSide(
                           color: Color(0xFF1E293B), width: 1.5)),
-                  contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                 ),
-                style: const TextStyle(
-                    fontSize: 13, color: Color(0xFF1E293B)),
+                style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
               ),
               const SizedBox(height: 20),
             ]),
@@ -5542,19 +6288,16 @@ class _EmailDialogState extends State<_EmailDialog> {
           child: Row(children: [
             Expanded(
               child: OutlinedButton(
-                onPressed:
-                    _isSending ? null : () => Navigator.pop(context),
+                onPressed: _isSending ? null : () => Navigator.pop(context),
                 style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFF374151),
                     side: const BorderSide(color: Color(0xFFD1D5DB)),
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 13),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8))),
                 child: const Text('Cancel',
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600)),
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               ),
             ),
             const SizedBox(width: 12),
@@ -5570,13 +6313,11 @@ class _EmailDialogState extends State<_EmailDialog> {
                     : const Icon(Icons.send_rounded, size: 16),
                 label: Text(_isSending ? 'Sending…' : 'Send',
                     style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600)),
+                        fontSize: 14, fontWeight: FontWeight.w600)),
                 style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1E293B),
                     foregroundColor: Colors.white,
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 13),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8))),

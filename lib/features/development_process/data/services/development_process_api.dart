@@ -1,17 +1,15 @@
 // lib/features/development_process/data/services/development_process_api.dart
 //
-// Add these static methods inside your existing ApiService class,
-// OR use this as a standalone helper that calls the same _authHeaders() / _rawPost() etc.
-//
-// INTEGRATION: Copy each method into api_service.dart inside the ApiService class.
-// The file path for INTEGRATION is: lib/core/services/api_service.dart
-//
-// This file shows the STANDALONE version for clarity.
+// FIX: "The project id field is required."
+// assignDevelopmentProcess() now includes 'project_id' in the POST body.
+// Previously the projectId was only used to build the URL path, but the
+// Laravel controller also validates it from the request body — causing the
+// "The project id field is required." validation error.
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:developer' as developer;
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
@@ -23,7 +21,9 @@ import '../../../../core/utils/api_exception.dart';
 import '../models/development_process_model.dart';
 
 class DevelopmentProcessApi {
-  // ── Shared helpers (mirrors ApiService private helpers) ──────────────────
+  DevelopmentProcessApi._();
+
+  // ── Auth headers ────────────────────────────────────────────────────────────
 
   static Future<Map<String, String>> _headers() async {
     final token = await AuthStorageService.getToken();
@@ -34,6 +34,16 @@ class DevelopmentProcessApi {
     };
   }
 
+  static Future<Map<String, String>> _multipartHeaders() async {
+    final token = await AuthStorageService.getToken();
+    return {
+      'Accept': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
+
+  // ── Decode helper ───────────────────────────────────────────────────────────
+
   static dynamic _decode(String body) {
     if (body.isEmpty) return {};
     try {
@@ -43,17 +53,15 @@ class DevelopmentProcessApi {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // FETCH DEVELOPMENT PROCESSES FOR A PROJECT
-  // GET /api/mobile/projects/{projectId}/development-processes
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Fetch development processes for a project ───────────────────────────────
+
   static Future<Map<String, dynamic>> fetchDevelopmentProcesses(
       int projectId) async {
     final url =
         '${ApiConstants.baseUrl}/api/mobile/projects/$projectId/development-processes';
 
-    developer.log('[DevProcessApi] fetchDevelopmentProcesses → GET $url',
-        name: 'DevProcessApi');
+    developer.log('[DevelopmentProcessApi] fetchDevelopmentProcesses → GET $url',
+        name: 'DevelopmentProcessApi');
 
     try {
       final response = await http
@@ -63,8 +71,8 @@ class DevelopmentProcessApi {
       final body = _decode(response.body);
 
       developer.log(
-          '[DevProcessApi] fetchDevelopmentProcesses ← ${response.statusCode}',
-          name: 'DevProcessApi');
+          '[DevelopmentProcessApi] fetchDevelopmentProcesses ← ${response.statusCode}',
+          name: 'DevelopmentProcessApi');
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return body is Map<String, dynamic> ? body : {'data': body};
@@ -84,10 +92,8 @@ class DevelopmentProcessApi {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // ASSIGN A DEVELOPMENT PROCESS
-  // POST /api/mobile/projects/{projectId}/development-processes/stage{N}/assign
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Assign a development process ────────────────────────────────────────────
+
   static Future<Map<String, dynamic>> assignDevelopmentProcess({
     required int projectId,
     required int stageNumber,
@@ -101,7 +107,12 @@ class DevelopmentProcessApi {
     final url =
         '${ApiConstants.baseUrl}/api/mobile/projects/$projectId/development-processes/stage$stageNumber/assign';
 
+    // FIX: 'project_id' is now included in the POST body.
+    // The Laravel controller validates request->input('project_id') in addition
+    // to reading it from the route parameter. Without this field in the body
+    // the server returned "The project id field is required."
     final payload = <String, dynamic>{
+      'project_id': projectId,       // ← FIX: was missing from body
       'process_id': processId,
       'order_no': orderNo,
       'stage': stage,
@@ -112,8 +123,8 @@ class DevelopmentProcessApi {
     };
 
     developer.log(
-        '[DevProcessApi] assignDevelopmentProcess → POST $url payload=$payload',
-        name: 'DevProcessApi');
+        '[DevelopmentProcessApi] assignDevelopmentProcess → POST $url payload=$payload',
+        name: 'DevelopmentProcessApi');
 
     try {
       final response = await http
@@ -127,8 +138,8 @@ class DevelopmentProcessApi {
       final body = _decode(response.body);
 
       developer.log(
-          '[DevProcessApi] assignDevelopmentProcess ← ${response.statusCode}: ${response.body}',
-          name: 'DevProcessApi');
+          '[DevelopmentProcessApi] assignDevelopmentProcess ← ${response.statusCode}: ${response.body}',
+          name: 'DevelopmentProcessApi');
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return body is Map<String, dynamic> ? body : {'success': true};
@@ -157,10 +168,8 @@ class DevelopmentProcessApi {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // UPLOAD FILE FOR A DEVELOPMENT PROCESS
-  // POST /api/mobile/projects/{projectId}/development-processes/stage{N}/upload
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Upload file for a development process ───────────────────────────────────
+
   static Future<Map<String, dynamic>> uploadDevelopmentProcessFile({
     required int projectId,
     required int stageNumber,
@@ -173,19 +182,16 @@ class DevelopmentProcessApi {
         '${ApiConstants.baseUrl}/api/mobile/projects/$projectId/development-processes/stage$stageNumber/upload';
 
     developer.log(
-        '[DevProcessApi] uploadDevelopmentProcessFile → POST $url '
+        '[DevelopmentProcessApi] uploadDevelopmentProcessFile → POST $url '
         'processId=$processId orderNo=$orderNo file=$fileName',
-        name: 'DevProcessApi');
+        name: 'DevelopmentProcessApi');
 
-    final token = await AuthStorageService.getToken();
     final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
     final mimeParts = mimeType.split('/');
 
     final request = http.MultipartRequest('POST', Uri.parse(url))
-      ..headers.addAll({
-        'Accept': 'application/json',
-        if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
-      })
+      ..headers.addAll(await _multipartHeaders())
+      ..fields['project_id'] = projectId.toString()   // ← also include here
       ..fields['process_id'] = processId.toString()
       ..fields['order_no'] = orderNo.toString()
       ..files.add(await http.MultipartFile.fromPath(
@@ -208,8 +214,8 @@ class DevelopmentProcessApi {
     final decoded = _decode(bodyStr);
 
     developer.log(
-        '[DevProcessApi] uploadDevelopmentProcessFile ← ${streamed.statusCode}: $bodyStr',
-        name: 'DevProcessApi');
+        '[DevelopmentProcessApi] uploadDevelopmentProcessFile ← ${streamed.statusCode}: $bodyStr',
+        name: 'DevelopmentProcessApi');
 
     if (streamed.statusCode >= 200 && streamed.statusCode < 300) {
       return decoded is Map<String, dynamic> ? decoded : {'success': true};
@@ -217,7 +223,9 @@ class DevelopmentProcessApi {
     if (streamed.statusCode == 401) {
       throw ApiException('Session expired. Please login again.');
     }
-    if (streamed.statusCode == 422 && decoded is Map && decoded['errors'] is Map) {
+    if (streamed.statusCode == 422 &&
+        decoded is Map &&
+        decoded['errors'] is Map) {
       final errors = Map<String, dynamic>.from(decoded['errors'] as Map);
       final firstKey = errors.keys.isNotEmpty ? errors.keys.first : null;
       if (firstKey != null &&
@@ -232,17 +240,66 @@ class DevelopmentProcessApi {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // GET TEAM MEMBERS FOR A TEAM (for assign modal dropdown)
-  // GET /api/mobile/teams/{teamId}/members
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Get pre-signed file URL ─────────────────────────────────────────────────
+
+  static Future<String> getFileUrl(String filePath) async {
+    if (filePath.isEmpty) {
+      throw ApiException('No file path provided.');
+    }
+
+    final uri = Uri.parse(ApiConstants.devProcessFileUrl).replace(
+      queryParameters: {
+        'file_path': filePath,
+        'path': filePath,
+      },
+    );
+
+    developer.log('[DevelopmentProcessApi] getFileUrl → GET $uri',
+        name: 'DevelopmentProcessApi');
+
+    try {
+      final response = await http
+          .get(uri, headers: await _headers())
+          .timeout(const Duration(seconds: 30));
+
+      final decoded = _decode(response.body);
+
+      developer.log(
+          '[DevelopmentProcessApi] getFileUrl ← ${response.statusCode}: ${response.body}',
+          name: 'DevelopmentProcessApi');
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final url = decoded is Map ? decoded['url']?.toString() : null;
+        if (url != null && url.isNotEmpty) return url;
+        throw ApiException('Server returned an empty file URL.');
+      }
+      if (response.statusCode == 401) {
+        throw ApiException('Session expired. Please login again.');
+      }
+      if (response.statusCode == 404) {
+        throw ApiException('File not found on the server.');
+      }
+      throw ApiException(
+        (decoded is Map ? decoded['message']?.toString() : null) ??
+            'Could not retrieve file URL (HTTP ${response.statusCode})',
+      );
+    } on TimeoutException {
+      throw ApiException('Request timed out. Please try again.');
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      throw ApiException('File URL error: $e');
+    }
+  }
+
+  // ── Fetch team members for assignment picker ─────────────────────────────────
+
   static Future<List<TeamMemberItem>> fetchTeamMembersForProcess(
       int teamId) async {
     final url = ApiConstants.teamMembers(teamId);
 
     developer.log(
-        '[DevProcessApi] fetchTeamMembersForProcess → GET $url teamId=$teamId',
-        name: 'DevProcessApi');
+        '[DevelopmentProcessApi] fetchTeamMembersForProcess → GET $url teamId=$teamId',
+        name: 'DevelopmentProcessApi');
 
     try {
       final response = await http
@@ -279,34 +336,6 @@ class DevelopmentProcessApi {
     } catch (e) {
       if (e is ApiException) rethrow;
       throw ApiException('Fetch team members error: $e');
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // GET FILE TEMPORARY URL
-  // GET /api/mobile/development-process/file-url?file_path=...
-  // ─────────────────────────────────────────────────────────────────────────
-  static Future<String> getFileUrl(String filePath) async {
-    final url =
-        '${ApiConstants.baseUrl}/api/mobile/development-process/file-url'
-        '?file_path=${Uri.encodeQueryComponent(filePath)}';
-
-    try {
-      final response = await http
-          .get(Uri.parse(url), headers: await _headers())
-          .timeout(ApiConstants.requestTimeout);
-
-      final body = _decode(response.body);
-
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        return body['url']?.toString() ?? '';
-      }
-      throw ApiException('Could not retrieve file URL.');
-    } on TimeoutException {
-      throw ApiException('Request timed out.');
-    } catch (e) {
-      if (e is ApiException) rethrow;
-      throw ApiException('Get file URL error: $e');
     }
   }
 }

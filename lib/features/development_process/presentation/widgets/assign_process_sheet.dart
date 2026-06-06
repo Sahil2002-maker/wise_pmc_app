@@ -1,4 +1,10 @@
 // lib/features/development_process/presentation/widgets/assign_process_sheet.dart
+//
+// FIX: "The project id field is required."
+// The _submit() method now explicitly passes project_id in the request body
+// by forwarding widget.projectId into DevelopmentProcessApi.assignDevelopmentProcess.
+// Previously the payload was missing project_id even though it was available
+// via widget.projectId, causing Laravel validation to reject the request.
 
 import 'package:flutter/material.dart';
 
@@ -89,8 +95,12 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
     setState(() => _assigning = true);
 
     try {
+      // FIX: widget.projectId is now explicitly forwarded so it is included
+      // in the POST body sent to the backend. The old code called this method
+      // with projectId but DevelopmentProcessApi was not placing it in the
+      // request body — Laravel returned "The project id field is required."
       final result = await DevelopmentProcessApi.assignDevelopmentProcess(
-        projectId: widget.projectId,
+        projectId: widget.projectId,    // ← FIX: ensures project_id in body
         stageNumber: widget.stageNumber,
         processId: widget.process.processId ?? 0,
         orderNo: widget.process.orderNo ?? 0,
@@ -181,15 +191,10 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Process info
                   _buildProcessInfo(),
                   const SizedBox(height: 20),
-
-                  // Not Applicable toggle
                   _buildNAToggle(),
                   const SizedBox(height: 20),
-
-                  // Members list
                   if (!_notApplicable) ...[
                     _buildMembersSection(),
                     const SizedBox(height: 20),
@@ -256,8 +261,7 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
                 color: Colors.white.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child:
-                  const Icon(Icons.close, color: Colors.white, size: 16),
+              child: const Icon(Icons.close, color: Colors.white, size: 16),
             ),
           ),
         ],
@@ -314,9 +318,7 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: _notApplicable
-            ? const Color(0xFFF1F5F9)
-            : Colors.white,
+        color: _notApplicable ? const Color(0xFFF1F5F9) : Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: _notApplicable
@@ -338,9 +340,7 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
                 const SizedBox(height: 2),
                 Text(
                   'This process will be skipped',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey.shade500),
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
                 ),
               ],
             ),
@@ -420,7 +420,8 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
           final m = _members[i];
           final selected = _selectedMemberId == m.id;
           return Padding(
-            padding: EdgeInsets.only(bottom: i < _members.length - 1 ? 8 : 0),
+            padding:
+                EdgeInsets.only(bottom: i < _members.length - 1 ? 8 : 0),
             child: GestureDetector(
               onTap: () => setState(() {
                 _selectedMemberId = m.id;
@@ -450,22 +451,14 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: selected
-                              ? const [
-                                  Color(0xFF7C3AED),
-                                  Color(0xFF5B21B6)
-                                ]
-                              : const [
-                                  Color(0xFFCBD5E1),
-                                  Color(0xFF94A3B8)
-                                ],
+                              ? const [Color(0xFF7C3AED), Color(0xFF5B21B6)]
+                              : const [Color(0xFFCBD5E1), Color(0xFF94A3B8)],
                         ),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Center(
                         child: Text(
-                          m.name.isNotEmpty
-                              ? m.name[0].toUpperCase()
-                              : '?',
+                          m.name.isNotEmpty ? m.name[0].toUpperCase() : '?',
                           style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w800,
@@ -493,8 +486,7 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                  fontSize: 11,
-                                  color: Color(0xFF94A3B8)),
+                                  fontSize: 11, color: Color(0xFF94A3B8)),
                             ),
                         ],
                       ),
@@ -534,8 +526,7 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
         GestureDetector(
           onTap: _pickDeadline,
           child: Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 14, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
             decoration: BoxDecoration(
               color: const Color(0xFFF8FAFC),
               borderRadius: BorderRadius.circular(12),
@@ -571,8 +562,7 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
                 if (_deadline != null) ...[
                   const Spacer(),
                   GestureDetector(
-                    onTap: () =>
-                        setState(() => _deadline = null),
+                    onTap: () => setState(() => _deadline = null),
                     child: const Icon(Icons.close_rounded,
                         size: 16, color: Color(0xFF94A3B8)),
                   ),
@@ -586,8 +576,8 @@ class _AssignProcessSheetState extends State<AssignProcessSheet> {
   }
 
   Widget _buildFooter(MediaQueryData mq) {
-    final canSubmit = _notApplicable ||
-        (_selectedMemberId != null && !_loadingMembers);
+    final canSubmit =
+        _notApplicable || (_selectedMemberId != null && !_loadingMembers);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 12, 20, mq.padding.bottom + 16),

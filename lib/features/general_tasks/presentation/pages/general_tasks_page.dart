@@ -1,8 +1,26 @@
 // lib/features/general_tasks/presentation/pages/general_tasks_page.dart
+//
+// CHANGES (latest backend alignment):
+//  1. Delete button is shown ONLY for tasks that have NOT been assigned to
+//     any executive (assignedTo.isEmpty).
+//  2. View button now opens the uploaded file properly:
+//     - Google Drive "view" links are opened using LaunchMode.inAppWebView
+//       to avoid the "Could not find any Google accounts" error that occurs
+//       when trying to open the Drive app via externalApplication mode.
+//     - Non-Google URLs are opened with externalApplication first, falling
+//       back to inAppWebView if launch fails.
+//  3. Task-card action matrix updated to match the web UI:
+//     • Unassigned   : Edit, Delete
+//     • Assigned / In-Progress : Reassign, Edit, Upload  (no Delete)
+//     • Completed    : Reassign, View, Reupload           (no Delete)
+//  4. NEW: Tab-based status filter (All / Completed / Assigned / Pending)
+//     matching the web UI screenshot. Filtering is local (no reload) and
+//     composable with the existing search bar.
 
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/services/api_service.dart';
 import '../../../../core/services/auth_storage_service.dart';
@@ -13,11 +31,16 @@ const List<String> _kAllowedExtensions = [
   'pdf', 'doc', 'docx', 'ppt', 'pptx',
   'mp4', 'avi',
   'jpeg', 'jpg', 'png', 'gif',
-  'dwg', 'dxf', 'zip',                                                                                                                                                                                                                                                                                                                                          
+  'dwg', 'dxf', 'zip',
 ];
 
 const String _kSupportedFormatsLabel =
     'Supported formats: PDF, DOC, DOCX, PPT, PPTX, MP4, AVI, JPEG, JPG, PNG, GIF, DWG, DXF, ZIP';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Status filter enum
+// ─────────────────────────────────────────────────────────────────────────────
+enum _TaskFilter { all, completed, assigned, pending }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Design tokens
@@ -127,7 +150,7 @@ class _StatusMeta {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Summary stat card widget (new)
+// Summary stat card widget
 // ─────────────────────────────────────────────────────────────────────────────
 class _StatCard extends StatelessWidget {
   final String label;
@@ -178,7 +201,6 @@ class _StatCard extends StatelessWidget {
                   ),
                   child: Icon(icon, size: 16, color: Colors.white),
                 ),
-                // Small decorative circle
                 Container(
                   width: 28,
                   height: 28,
@@ -211,6 +233,151 @@ class _StatCard extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Filter tab bar widget
+// ─────────────────────────────────────────────────────────────────────────────
+class _FilterTabBar extends StatelessWidget {
+  final _TaskFilter selected;
+  final int allCount;
+  final int completedCount;
+  final int assignedCount;
+  final int pendingCount;
+  final ValueChanged<_TaskFilter> onChanged;
+
+  const _FilterTabBar({
+    required this.selected,
+    required this.allCount,
+    required this.completedCount,
+    required this.assignedCount,
+    required this.pendingCount,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: _D.border, width: 1.2),
+        borderRadius: BorderRadius.circular(_D.r10),
+        color: _D.surface,
+      ),
+      child: Row(
+        children: [
+          _tab(
+            filter: _TaskFilter.all,
+            label: 'All',
+            count: allCount,
+            activeColor: _D.green,
+            activeBg: _D.greenBg,
+            isFirst: true,
+          ),
+          _divider(),
+          _tab(
+            filter: _TaskFilter.completed,
+            label: 'Completed',
+            count: completedCount,
+            activeColor: _D.green,
+            activeBg: _D.greenBg,
+          ),
+          _divider(),
+          _tab(
+            filter: _TaskFilter.assigned,
+            label: 'Assigned',
+            count: assignedCount,
+            activeColor: _D.orange,
+            activeBg: _D.orangeBg,
+          ),
+          _divider(),
+          _tab(
+            filter: _TaskFilter.pending,
+            label: 'Pending',
+            count: pendingCount,
+            activeColor: _D.red,
+            activeBg: _D.redBg,
+            isLast: true,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _divider() => Container(
+        width: 1,
+        height: 44,
+        color: _D.border,
+      );
+
+  Widget _tab({
+    required _TaskFilter filter,
+    required String label,
+    required int count,
+    required Color activeColor,
+    required Color activeBg,
+    bool isFirst = false,
+    bool isLast = false,
+  }) {
+    final isActive = selected == filter;
+
+    BorderRadius borderRadius = BorderRadius.zero;
+    if (isFirst) {
+      borderRadius = const BorderRadius.only(
+        topLeft: Radius.circular(_D.r10 - 1),
+        bottomLeft: Radius.circular(_D.r10 - 1),
+      );
+    } else if (isLast) {
+      borderRadius = const BorderRadius.only(
+        topRight: Radius.circular(_D.r10 - 1),
+        bottomRight: Radius.circular(_D.r10 - 1),
+      );
+    }
+
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => onChanged(filter),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          height: 44,
+          decoration: BoxDecoration(
+            color: isActive ? activeBg : Colors.transparent,
+            borderRadius: borderRadius,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                  color: isActive ? activeColor : _D.textSec,
+                  letterSpacing: 0.1,
+                ),
+              ),
+              const SizedBox(height: 2),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                decoration: BoxDecoration(
+                  color: isActive ? activeColor : _D.slateBg,
+                  borderRadius: BorderRadius.circular(_D.r99),
+                ),
+                child: Text(
+                  count.toString(),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: isActive ? Colors.white : _D.textMuted,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -789,14 +956,81 @@ class _UploadSheetState extends State<_UploadSheet> {
 // ─────────────────────────────────────────────────────────────────────────────
 // View document bottom sheet
 // ─────────────────────────────────────────────────────────────────────────────
-class _ViewDocSheet extends StatelessWidget {
+class _ViewDocSheet extends StatefulWidget {
   final GeneralTaskModel task;
   const _ViewDocSheet({required this.task});
 
   @override
+  State<_ViewDocSheet> createState() => _ViewDocSheetState();
+}
+
+class _ViewDocSheetState extends State<_ViewDocSheet> {
+  bool _isOpening = false;
+
+  static bool _isGoogleDriveUrl(String url) =>
+      url.contains('drive.google.com') || url.contains('docs.google.com');
+
+  static String _toDrivePreviewUrl(String url) {
+    if (url.contains('/preview')) return url;
+    return url
+        .replaceAll(RegExp(r'/view(\?.*)?$'), '/preview')
+        .replaceAll(RegExp(r'/edit(\?.*)?$'), '/preview');
+  }
+
+  String _resolveUrl(String rawPath) {
+    String url = rawPath;
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://test.pmc.wisehome.in/$url';
+    }
+    if (_isGoogleDriveUrl(url)) {
+      url = _toDrivePreviewUrl(url);
+    }
+    return url;
+  }
+
+  Future<void> _openFile() async {
+    final rawPath = widget.task.filePath ?? '';
+    if (rawPath.isEmpty) return;
+    setState(() => _isOpening = true);
+    try {
+      final urlString = _resolveUrl(rawPath);
+      final uri = Uri.parse(urlString);
+      bool launched = false;
+      if (_isGoogleDriveUrl(urlString)) {
+        launched = await launchUrl(uri, mode: LaunchMode.inAppWebView);
+      } else {
+        launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+        if (!launched) {
+          launched = await launchUrl(uri, mode: LaunchMode.inAppWebView);
+        }
+      }
+      if (!launched && mounted) {
+        _showError('Could not open the file. Please try downloading it.');
+      }
+    } catch (e) {
+      if (mounted) _showError('Could not open file: $e');
+    } finally {
+      if (mounted) setState(() => _isOpening = false);
+    }
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: _D.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(12),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final filePath   = task.filePath   ?? '';
-    final uploadDate = task.uploadedDate ?? '';
+    final filePath   = widget.task.filePath   ?? '';
+    final uploadDate = widget.task.uploadedDate ?? '';
+    final isGDrive   = _isGoogleDriveUrl(filePath);
 
     return Container(
       decoration: const BoxDecoration(
@@ -816,7 +1050,7 @@ class _ViewDocSheet extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('Document Submitted', style: _D.titleLg),
-                Text(task.taskName,
+                Text(widget.task.taskName,
                     style: _D.caption.copyWith(fontSize: 12),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
@@ -824,7 +1058,6 @@ class _ViewDocSheet extends StatelessWidget {
             _closeBtn(() => Navigator.pop(context)),
           ]),
           const SizedBox(height: 20),
-
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -836,26 +1069,59 @@ class _ViewDocSheet extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  const Icon(Icons.insert_drive_file_outlined,
-                      size: 13, color: _D.textMuted),
+                  Icon(
+                    isGDrive
+                        ? Icons.drive_folder_upload_outlined
+                        : Icons.insert_drive_file_outlined,
+                    size: 13,
+                    color: isGDrive ? _D.blue : _D.textMuted,
+                  ),
                   const SizedBox(width: 5),
-                  Text('Uploaded File', style: _D.caption.copyWith(fontSize: 11)),
+                  Text(
+                    isGDrive ? 'Google Drive File' : 'Uploaded File',
+                    style: _D.caption.copyWith(
+                      fontSize: 11,
+                      color: isGDrive ? _D.blueFg : _D.textMuted,
+                    ),
+                  ),
                 ]),
                 const SizedBox(height: 6),
                 Text(
                   filePath,
                   style: const TextStyle(
-                    fontSize: 13, color: _D.blue,
+                    fontSize: 13,
+                    color: _D.blue,
                     decoration: TextDecoration.underline,
                     decorationColor: _D.blue,
                   ),
-                  maxLines: 3, overflow: TextOverflow.ellipsis,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
           const SizedBox(height: 12),
-
+          if (isGDrive)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: _D.blueBg,
+                borderRadius: BorderRadius.circular(_D.r10),
+                border: Border.all(color: _D.blue.withValues(alpha: 0.2)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.info_outline_rounded, size: 14, color: _D.blueFg),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'This file is stored on Google Drive. '
+                    'It will open in your browser — no sign-in required.',
+                    style: _D.caption.copyWith(color: _D.blueFg, fontSize: 11),
+                  ),
+                ),
+              ]),
+            ),
+          if (isGDrive) const SizedBox(height: 12),
           if (uploadDate.isNotEmpty)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -869,14 +1135,45 @@ class _ViewDocSheet extends StatelessWidget {
                 const SizedBox(width: 8),
                 Text('Completed on $uploadDate',
                     style: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
                         color: _D.greenFg)),
               ]),
             ),
           const SizedBox(height: 20),
-
           SizedBox(
-            width: double.infinity, height: 48,
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton.icon(
+              onPressed: _isOpening || filePath.isEmpty ? null : _openFile,
+              icon: _isOpening
+                  ? _spinner(size: 18)
+                  : Icon(
+                      isGDrive
+                          ? Icons.open_in_browser_rounded
+                          : Icons.open_in_new_rounded,
+                      size: 18,
+                    ),
+              label: Text(
+                _isOpening
+                    ? 'Opening…'
+                    : (isGDrive ? 'Open in Browser' : 'Open File'),
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+              ),
+              style: ElevatedButton.styleFrom(
+                elevation: 0,
+                backgroundColor: _D.green,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: _D.green.withValues(alpha: 0.55),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_D.r12)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
             child: OutlinedButton(
               onPressed: () => Navigator.pop(context),
               style: OutlinedButton.styleFrom(
@@ -994,7 +1291,6 @@ class _AssignDialogState extends State<_AssignDialog> {
                 ),
               ]),
             ),
-
             Flexible(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(16),
@@ -1051,8 +1347,7 @@ class _AssignDialogState extends State<_AssignDialog> {
                                         fontSize: 14,
                                         fontWeight: FontWeight.w500,
                                         color: _D.textPri)),
-                                subtitle: Text(user.email,
-                                    style: _D.caption),
+                                subtitle: Text(user.email, style: _D.caption),
                                 onChanged: (v) => setState(() {
                                   if (v == true) _selected.add(user.id);
                                   else _selected.remove(user.id);
@@ -1068,7 +1363,6 @@ class _AssignDialogState extends State<_AssignDialog> {
                 ),
               ),
             ),
-
             Container(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
               decoration: const BoxDecoration(
@@ -1085,8 +1379,7 @@ class _AssignDialogState extends State<_AssignDialog> {
                           borderRadius: BorderRadius.circular(_D.r10)),
                     ),
                     child: const Text('Cancel',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 13)),
+                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                   ),
                 )),
                 const SizedBox(width: 10),
@@ -1160,10 +1453,13 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
   final _searchFocus = FocusNode();
   int _loadGeneration = 0;
 
+  // ── NEW: active filter tab ────────────────────────────────────────────────
+  _TaskFilter _activeFilter = _TaskFilter.all;
+
   @override
   void initState() {
     super.initState();
-    _searchCtrl.addListener(_applySearch);
+    _searchCtrl.addListener(_applyFilters);
     _initialLoad();
   }
 
@@ -1188,7 +1484,7 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
       if (!mounted) return;
       setState(() {
         allTasks = tasks;
-        _applySearchToList(tasks);
+        _applyFiltersToList(tasks);
         isLoadingTasks = false;
       });
     } catch (e) {
@@ -1206,7 +1502,7 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
       if (!mounted || gen != _loadGeneration) return;
       setState(() {
         allTasks = tasks;
-        _applySearchToList(tasks);
+        _applyFiltersToList(tasks);
         isLoadingTasks = false;
       });
     } catch (e) {
@@ -1215,29 +1511,59 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
     }
   }
 
-  void _applySearchToList(List<GeneralTaskModel> tasks) {
-    final q = _searchCtrl.text.trim().toLowerCase();
-    filteredTasks = q.isEmpty
-        ? List.of(tasks)
-        : tasks.where((t) =>
-            t.taskName.toLowerCase().contains(q) ||
-            t.taskDescription.toLowerCase().contains(q) ||
-            t.createdByName.toLowerCase().contains(q)).toList();
+  // ── Filter logic (tab + search, composable) ───────────────────────────────
+
+  /// Returns true when [t] passes the active tab filter.
+  bool _passesTabFilter(GeneralTaskModel t) {
+    switch (_activeFilter) {
+      case _TaskFilter.all:
+        return true;
+      case _TaskFilter.completed:
+        return t.isCompleted;
+      case _TaskFilter.assigned:
+        // "Assigned" = has at least one assignee but not yet completed
+        return t.assignedTo.isNotEmpty && !t.isCompleted;
+      case _TaskFilter.pending:
+        // "Pending" = no assignee yet
+        return t.assignedTo.isEmpty && !t.isCompleted;
+    }
   }
 
-  void _applySearch() {
-    if (mounted) setState(() => _applySearchToList(allTasks));
+  void _applyFiltersToList(List<GeneralTaskModel> tasks) {
+    final q = _searchCtrl.text.trim().toLowerCase();
+    filteredTasks = tasks.where((t) {
+      if (!_passesTabFilter(t)) return false;
+      if (q.isEmpty) return true;
+      return t.taskName.toLowerCase().contains(q) ||
+          t.taskDescription.toLowerCase().contains(q) ||
+          t.createdByName.toLowerCase().contains(q);
+    }).toList();
   }
+
+  void _applyFilters() {
+    if (mounted) setState(() => _applyFiltersToList(allTasks));
+  }
+
+  void _setFilter(_TaskFilter f) {
+    if (_activeFilter == f) return;
+    setState(() {
+      _activeFilter = f;
+      _applyFiltersToList(allTasks);
+    });
+  }
+
+  // ── Computed counts (always from allTasks, not filteredTasks) ────────────
+
+  int get _totalCount     => allTasks.length;
+  int get _completedCount => allTasks.where((t) => t.isCompleted).length;
+  int get _assignedCount  =>
+      allTasks.where((t) => t.assignedTo.isNotEmpty && !t.isCompleted).length;
+  int get _pendingCount   =>
+      allTasks.where((t) => t.assignedTo.isEmpty && !t.isCompleted).length;
 
   bool get canCreateTask =>
       userRole.toLowerCase() == 'admin' ||
       userRole.toLowerCase() == 'teamleader';
-
-  // ── Computed stats ────────────────────────────────────────────────────────
-
-  int get _totalCount     => allTasks.length;
-  int get _completedCount => allTasks.where((t) => t.isCompleted).length;
-  int get _pendingCount   => allTasks.where((t) => !t.isCompleted).length;
 
   // ── Snackbar ──────────────────────────────────────────────────────────────
 
@@ -1531,7 +1857,7 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
                   const SizedBox(height: 14),
                 ],
 
-                // ── Stats cards row (NEW) ──────────────────────────────
+                // ── Stat cards row ────────────────────────────────────
                 if (!isLoadingTasks && errorMessage == null) ...[
                   Row(
                     children: [
@@ -1559,6 +1885,19 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
                         icon: Icons.hourglass_bottom_rounded,
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 14),
+                ],
+
+                // ── NEW: Status filter tab bar ─────────────────────────
+                if (!isLoadingTasks && errorMessage == null) ...[
+                  _FilterTabBar(
+                    selected:       _activeFilter,
+                    allCount:       _totalCount,
+                    completedCount: _completedCount,
+                    assignedCount:  _assignedCount,
+                    pendingCount:   _pendingCount,
+                    onChanged:      _setFilter,
                   ),
                   const SizedBox(height: 14),
                 ],
@@ -1602,9 +1941,7 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
-                      filteredTasks.length == allTasks.length
-                          ? '${allTasks.length} task${allTasks.length == 1 ? '' : 's'}'
-                          : '${filteredTasks.length} of ${allTasks.length} tasks',
+                      _buildResultCountLabel(),
                       style: _D.caption,
                     ),
                   ),
@@ -1623,6 +1960,28 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
         ],
       ),
     );
+  }
+
+  /// Builds a helpful result-count label that reflects the active filter.
+  String _buildResultCountLabel() {
+    final total = allTasks.length;
+    final shown = filteredTasks.length;
+    final filterLabel = switch (_activeFilter) {
+      _TaskFilter.all       => '',
+      _TaskFilter.completed => ' completed',
+      _TaskFilter.assigned  => ' assigned',
+      _TaskFilter.pending   => ' pending',
+    };
+
+    final q = _searchCtrl.text.trim();
+    if (q.isEmpty) {
+      if (_activeFilter == _TaskFilter.all) {
+        return '$total task${total == 1 ? '' : 's'}';
+      }
+      return '$shown$filterLabel task${shown == 1 ? '' : 's'} (of $total)';
+    }
+    return '$shown result${shown == 1 ? '' : 's'} for "$q"'
+        '${filterLabel.isNotEmpty ? ' ($filterLabel)' : ''}';
   }
 
   Widget _buildBody() {
@@ -1667,8 +2026,7 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(_D.r10)),
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 24, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             ),
           ),
         ],
@@ -1676,6 +2034,10 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
     }
 
     if (filteredTasks.isEmpty) {
+      // Determine whether the empty state is a filter mismatch or truly empty
+      final isFilterEmpty = allTasks.isNotEmpty && filteredTasks.isEmpty;
+      final isSearchEmpty = _searchCtrl.text.trim().isNotEmpty;
+
       return Center(child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1687,20 +2049,41 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
             child: const Icon(Icons.task_alt_rounded, size: 38, color: _D.green),
           ),
           const SizedBox(height: 14),
-          Text(allTasks.isEmpty ? 'No tasks yet' : 'No results found',
-              style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: _D.textPri)),
+          Text(
+            isSearchEmpty
+                ? 'No results found'
+                : (isFilterEmpty ? 'No tasks in this category' : 'No tasks yet'),
+            style: const TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, color: _D.textPri),
+          ),
           const SizedBox(height: 6),
           Text(
-            allTasks.isEmpty
-                ? 'Create your first task to get started'
-                : 'Try a different search term',
+            isSearchEmpty
+                ? 'Try a different search term'
+                : (isFilterEmpty
+                    ? 'Try selecting a different filter tab'
+                    : 'Create your first task to get started'),
             style: _D.body, textAlign: TextAlign.center,
           ),
           const SizedBox(height: 20),
-          if (allTasks.isEmpty && canCreateTask)
+          if (isFilterEmpty || isSearchEmpty)
+            OutlinedButton.icon(
+              onPressed: () {
+                _searchCtrl.clear();
+                _setFilter(_TaskFilter.all);
+              },
+              icon: const Icon(Icons.filter_list_off_rounded, size: 18),
+              label: const Text('Clear Filters'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _D.green,
+                side: const BorderSide(color: _D.green),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_D.r10)),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 24, vertical: 12),
+              ),
+            )
+          else if (canCreateTask)
             ElevatedButton.icon(
               onPressed: _showCreateSheet,
               icon: const Icon(Icons.add_rounded, size: 18),
@@ -1708,20 +2091,6 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
               style: ElevatedButton.styleFrom(
                 elevation: 0, backgroundColor: _D.green,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(_D.r10)),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 24, vertical: 12),
-              ),
-            )
-          else
-            OutlinedButton.icon(
-              onPressed: _loadTasks,
-              icon: const Icon(Icons.refresh_rounded, size: 18),
-              label: const Text('Refresh'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _D.green,
-                side: const BorderSide(color: _D.green),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(_D.r10)),
                 padding: const EdgeInsets.symmetric(
@@ -1759,7 +2128,7 @@ class _GeneralTasksPageState extends State<GeneralTasksPage> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Task card — enhanced design
+// Task card
 // ─────────────────────────────────────────────────────────────────────────────
 class _TaskCard extends StatelessWidget {
   final GeneralTaskModel task;
@@ -1790,6 +2159,8 @@ class _TaskCard extends StatelessWidget {
     return raw;
   }
 
+  bool get _showDelete => task.canDelete && task.assignedTo.isEmpty;
+
   @override
   Widget build(BuildContext context) {
     final hasDoc = (task.filePath ?? '').isNotEmpty;
@@ -1810,8 +2181,6 @@ class _TaskCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-
-          // ── Colour accent bar (thicker + rounded-only-top) ────────────
           Container(
             height: 5,
             decoration: BoxDecoration(
@@ -1826,13 +2195,11 @@ class _TaskCard extends StatelessWidget {
             ),
           ),
 
-          // ── Title row + status pill ───────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 14, 0),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Status dot indicator
                 Padding(
                   padding: const EdgeInsets.only(top: 3, right: 8),
                   child: Container(
@@ -1843,8 +2210,7 @@ class _TaskCard extends StatelessWidget {
                       boxShadow: [
                         BoxShadow(
                           color: status.dot.withValues(alpha: 0.4),
-                          blurRadius: 4,
-                          spreadRadius: 1,
+                          blurRadius: 4, spreadRadius: 1,
                         ),
                       ],
                     ),
@@ -1859,21 +2225,17 @@ class _TaskCard extends StatelessWidget {
                     color: status.bg,
                     borderRadius: BorderRadius.circular(_D.r99),
                     border: Border.all(
-                        color: status.dot.withValues(alpha: 0.25),
-                        width: 1),
+                        color: status.dot.withValues(alpha: 0.25), width: 1),
                   ),
                   child: Text(status.label,
                       style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: status.fg,
-                          letterSpacing: 0.2)),
+                          fontSize: 11, fontWeight: FontWeight.w700,
+                          color: status.fg, letterSpacing: 0.2)),
                 ),
               ],
             ),
           ),
 
-          // ── Description ───────────────────────────────────────────────
           if (task.taskDescription.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(32, 5, 16, 0),
@@ -1882,7 +2244,6 @@ class _TaskCard extends StatelessWidget {
                   maxLines: 2, overflow: TextOverflow.ellipsis),
             ),
 
-          // ── Meta chips ────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: Wrap(
@@ -1908,7 +2269,6 @@ class _TaskCard extends StatelessWidget {
             ),
           ),
 
-          // ── Completion badge ──────────────────────────────────────────
           if (hasDoc && (task.uploadedDate ?? '').isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
@@ -1929,8 +2289,7 @@ class _TaskCard extends StatelessWidget {
                   const SizedBox(width: 5),
                   Text('Completed on ${task.uploadedDate}',
                       style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 11, fontWeight: FontWeight.w600,
                           color: _D.greenFg)),
                 ]),
               ),
@@ -1941,82 +2300,118 @@ class _TaskCard extends StatelessWidget {
             child: Container(height: 1, color: _D.border),
           ),
 
-          // ── Action area ───────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(children: [
-                  Expanded(child: Wrap(
-                    spacing: 6, runSpacing: 6,
-                    children: [
-                      if (task.canAssign)
-                        _btn(
-                          label: task.isAssigned ? 'Reassign' : 'Assign',
-                          icon: Icons.person_add_alt_rounded,
-                          bg: _D.blueBg, fg: _D.blueFg, onTap: onAssign,
-                        ),
-                      if (task.canEdit && !hasDoc)
-                        _btn(
-                          label: 'Edit',
-                          icon: Icons.edit_rounded,
-                          bg: _D.slateBg, fg: _D.slate, onTap: onEdit,
-                        ),
-                      if (!task.isCompleted && !hasDoc &&
-                          !task.canUpload && task.canEdit)
-                        _btn(
-                          label: 'Complete',
-                          icon: Icons.check_circle_outline_rounded,
-                          bg: _D.greenBg, fg: _D.greenFg, onTap: onComplete,
-                        ),
-                    ],
-                  )),
-                  if (task.canDelete)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 6),
-                      child: GestureDetector(
-                        onTap: onDelete,
-                        child: Container(
-                          height: 34, width: 34,
-                          decoration: BoxDecoration(
-                              color: _D.redBg,
-                              borderRadius: BorderRadius.circular(_D.r8)),
-                          child: const Icon(Icons.delete_outline_rounded,
-                              size: 17, color: _D.redFg),
-                        ),
-                      ),
-                    ),
-                ]),
-
-                if (task.canUpload || task.canViewDoc) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6, runSpacing: 6,
-                    children: [
-                      if (task.canViewDoc)
-                        _btn(
-                          label: 'View',
-                          icon: Icons.visibility_outlined,
-                          bg: _D.indigoBg, fg: _D.indigo, onTap: onViewDoc,
-                        ),
-                      if (task.canUpload)
-                        _btn(
-                          label: hasDoc ? 'Reupload' : 'Upload',
-                          icon: hasDoc
-                              ? Icons.refresh_rounded
-                              : Icons.upload_rounded,
-                          bg: _D.purpleBg, fg: _D.purpleFg, onTap: onUpload,
-                        ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
+            child: _buildActions(hasDoc),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildActions(bool hasDoc) {
+    if (task.isCompleted || hasDoc) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Expanded(child: Wrap(
+              spacing: 6, runSpacing: 6,
+              children: [
+                if (task.canAssign)
+                  _btn(
+                    label: 'Reassign',
+                    icon: Icons.person_add_alt_rounded,
+                    bg: _D.blueBg, fg: _D.blueFg, onTap: onAssign,
+                  ),
+              ],
+            )),
+          ]),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6, runSpacing: 6,
+            children: [
+              if (task.canViewDoc)
+                _btn(
+                  label: 'View',
+                  icon: Icons.visibility_outlined,
+                  bg: _D.indigoBg, fg: _D.indigo, onTap: onViewDoc,
+                ),
+              if (task.canUpload)
+                _btn(
+                  label: 'Reupload',
+                  icon: Icons.refresh_rounded,
+                  bg: _D.purpleBg, fg: _D.purpleFg, onTap: onUpload,
+                ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    if (task.isAssigned) {
+      return Row(children: [
+        Expanded(child: Wrap(
+          spacing: 6, runSpacing: 6,
+          children: [
+            if (task.canAssign)
+              _btn(
+                label: 'Reassign',
+                icon: Icons.person_add_alt_rounded,
+                bg: _D.blueBg, fg: _D.blueFg, onTap: onAssign,
+              ),
+            if (task.canEdit)
+              _btn(
+                label: 'Edit',
+                icon: Icons.edit_rounded,
+                bg: _D.slateBg, fg: _D.slate, onTap: onEdit,
+              ),
+            if (task.canUpload)
+              _btn(
+                label: 'Upload',
+                icon: Icons.upload_rounded,
+                bg: _D.purpleBg, fg: _D.purpleFg, onTap: onUpload,
+              ),
+          ],
+        )),
+      ]);
+    }
+
+    // Unassigned
+    return Row(children: [
+      Expanded(child: Wrap(
+        spacing: 6, runSpacing: 6,
+        children: [
+          if (task.canAssign)
+            _btn(
+              label: 'Assign',
+              icon: Icons.person_add_alt_rounded,
+              bg: _D.blueBg, fg: _D.blueFg, onTap: onAssign,
+            ),
+          if (task.canEdit)
+            _btn(
+              label: 'Edit',
+              icon: Icons.edit_rounded,
+              bg: _D.slateBg, fg: _D.slate, onTap: onEdit,
+            ),
+        ],
+      )),
+      if (_showDelete)
+        Padding(
+          padding: const EdgeInsets.only(left: 6),
+          child: GestureDetector(
+            onTap: onDelete,
+            child: Container(
+              height: 34, width: 34,
+              decoration: BoxDecoration(
+                  color: _D.redBg,
+                  borderRadius: BorderRadius.circular(_D.r8)),
+              child: const Icon(Icons.delete_outline_rounded,
+                  size: 17, color: _D.redFg),
+            ),
+          ),
+        ),
+    ]);
   }
 
   Widget _chip(IconData icon, String label,
