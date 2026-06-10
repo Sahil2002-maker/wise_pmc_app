@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/services/api_service.dart';
 import '../../../../core/services/auth_storage_service.dart';
-// REMOVED: '../../../../core/services/permission_service.dart' — unused import
 import '../../data/models/project_dashboard_model.dart';
 import '../widgets/dashboard_header.dart';
 import '../widgets/dashboard_sidebar.dart';
@@ -21,6 +20,9 @@ import '../../../stage_report/presentation/pages/stage_report_page.dart';
 import '../../../process_list/presentation/pages/process_list_page.dart';
 import '../../../process/presentation/pages/process_management_page.dart';
 import '../../../development_process/presentation/pages/dev_process_page.dart';
+
+// ↓ NEW: import the employee dashboard page
+import 'employee_dashboard_page.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -44,7 +46,7 @@ class _DashboardPageState extends State<DashboardPage>
 
   String userName    = 'Admin';
   String userRole    = 'admin';
-  int    userId      = 0;         // ← NEW: loaded from AuthStorageService
+  int    userId      = 0;
   List<String> permissions = [];
 
   @override
@@ -73,13 +75,13 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _loadLocalUser() async {
     final savedName        = await AuthStorageService.getUserName();
     final savedRole        = await AuthStorageService.getUserRole();
-    final savedUserId      = await AuthStorageService.getUserId();   // ← NEW
+    final savedUserId      = await AuthStorageService.getUserId();
     final savedPermissions = await AuthStorageService.getPermissions();
     if (!mounted) return;
     setState(() {
       userName    = (savedName == null || savedName.isEmpty) ? 'Admin' : savedName;
       userRole    = (savedRole == null || savedRole.isEmpty) ? 'admin' : savedRole;
-      userId      = savedUserId ?? 0;                                // ← NEW
+      userId      = savedUserId ?? 0;
       permissions = savedPermissions;
     });
   }
@@ -90,11 +92,14 @@ class _DashboardPageState extends State<DashboardPage>
         isLoading    = true;
         errorMessage = null;
       });
+
+      // Non-admin roles use EmployeeDashboardPage — no project fetch needed here
       if (!_isAdminRole) {
         if (!mounted) return;
         setState(() => isLoading = false);
         return;
       }
+
       final projects = await ApiService.fetchDashboardProjects();
       if (!mounted) return;
       setState(() {
@@ -154,12 +159,6 @@ class _DashboardPageState extends State<DashboardPage>
   void _openTeamReport()    => _navigateTo(const TeamReportPage());
   void _openStageReport()   => _navigateTo(const StageReportPage());
 
-  // ── Process navigation ────────────────────────────────────────────────────
-  // Navigates to the existing ProcessManagementPage.
-  // If your page accepts a param to distinguish Re-Development vs Development,
-  // add it here. Otherwise both items open the same page (matches backend
-  // where both routes are under the same 'process.index' controller).
-
   void _openReDevelopmentProcess() => _navigateTo(
         const ProcessManagementPage(),
       );
@@ -193,7 +192,7 @@ class _DashboardPageState extends State<DashboardPage>
   DashboardSidebar _buildSidebar() {
     return DashboardSidebar(
       userRole:                   userRole,
-      userId:                     userId,                      // ← FIX: was missing
+      userId:                     userId,
       permissions:                permissions,
       onDashboardTap:             () {},
       onProjectListTap:           _openProjectList,
@@ -208,8 +207,8 @@ class _DashboardPageState extends State<DashboardPage>
       onTeamReportTap:            _openTeamReport,
       onStageReportTap:           _openStageReport,
       onUserManagementTap:        () => _showComingSoon('User Management'),
-      onReDevelopmentProcessTap:  _openReDevelopmentProcess,   // ← FIX: was missing
-      onDevelopmentProcessTap:    _openDevelopmentProcess,     // ← FIX: was missing
+      onReDevelopmentProcessTap:  _openReDevelopmentProcess,
+      onDevelopmentProcessTap:    _openDevelopmentProcess,
     );
   }
 
@@ -241,7 +240,7 @@ class _DashboardPageState extends State<DashboardPage>
                   Expanded(
                     child: _isAdminRole
                         ? _buildAdminBody(isMobile)
-                        : const SizedBox.expand(),
+                        : _buildNonAdminBody(), // ← CHANGED: was SizedBox.expand()
                   ),
                 ],
               ),
@@ -250,6 +249,13 @@ class _DashboardPageState extends State<DashboardPage>
         ),
       ),
     );
+  }
+
+  // ── Non-admin body (employee / team leader) ───────────────────────────────
+  // EmployeeDashboardPage handles both layouts via data.isTeamLeader internally.
+
+  Widget _buildNonAdminBody() {
+    return const EmployeeDashboardPage();
   }
 
   // ── Admin body ────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 // lib/core/constants/api_constants.dart
 
 class ApiConstants {
-  static const String _productionBase = 'https://test.pmc.wisehome.in';
+  static const String _productionBase = 'http://wise.panvelcity.in';
   // ignore: unused_field
   static const String _localBase = 'http://10.0.2.2:8000';
   static String get baseUrl => _productionBase;

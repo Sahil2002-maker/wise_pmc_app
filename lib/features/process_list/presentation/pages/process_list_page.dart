@@ -78,7 +78,7 @@ Future<void> _openDocumentUrl(
 // ─────────────────────────────────────────────────────────────────────────────
 // Stage 0 sub-tab keys
 // ─────────────────────────────────────────────────────────────────────────────
-enum Stage0SubTab { projectInfo, pmcApplication, pmcAppointment }
+enum Stage0SubTab { pmcApplication, pmcAppointment }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stage 3 sub-tab keys
@@ -232,19 +232,19 @@ class _ProcessListPageState extends State<ProcessListPage>
   }
 
   void _initStage0SubTabController() {
-    _stage0SubTabController?.dispose();
-    _stage0SubTabController = TabController(
-      length: 3,
-      vsync: this,
-      initialIndex: _currentStage0SubTab.index,
-    );
-    _stage0SubTabController!.addListener(() {
-      if (!_stage0SubTabController!.indexIsChanging && mounted) {
-        setState(() => _currentStage0SubTab =
-            Stage0SubTab.values[_stage0SubTabController!.index]);
-      }
-    });
-  }
+  _stage0SubTabController?.dispose();
+  final tabCount = _isAdmin ? 3 : 2;  // 3 with Project Info, 2 without
+  _stage0SubTabController = TabController(
+    length: tabCount,
+    vsync: this,
+    initialIndex: 0,
+  );
+  _stage0SubTabController!.addListener(() {
+    if (!_stage0SubTabController!.indexIsChanging && mounted) {
+      setState(() {});
+    }
+  });
+}
 
   void _initStage3SubTabController() {
     _stage3SubTabController?.dispose();
@@ -509,6 +509,7 @@ if (isAdmin || isTeamLeader) {
         _isRefreshing = false;
         _errorMessage = null;
       });
+      _initStage0SubTabController();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1157,57 +1158,69 @@ if (isAdmin || isTeamLeader) {
   }
 
   Widget _buildStage0Tab() {
-    final ctrl = _stage0SubTabController;
-    if (ctrl == null) return const SizedBox.shrink();
-    return Column(children: [
-      Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
-        ),
-        child: TabBar(
-          controller: ctrl,
-          isScrollable: true,
-          tabAlignment: TabAlignment.start,
-          labelColor: AppColors.primaryGreen,
-          unselectedLabelColor: const Color(0xFF94A3B8),
-          indicatorColor: AppColors.primaryGreen,
-          indicatorWeight: 2,
-          labelStyle:
-              const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-          unselectedLabelStyle:
-              const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
-          tabs: const [
-            Tab(
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.info_outline, size: 14),
-              SizedBox(width: 5),
-              Text('Project Info'),
-            ])),
-            Tab(
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.description_outlined, size: 14),
-              SizedBox(width: 5),
-              Text('PMC Application'),
-            ])),
-            Tab(
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.person_pin_outlined, size: 14),
-              SizedBox(width: 5),
-              Text('PMC Appointment'),
-            ])),
-          ],
-        ),
-      ),
-      Expanded(
-        child: TabBarView(controller: ctrl, children: [
-          _buildProjectInfoSubTab(),
-          _buildPmcApplicationSubTab(),
-          _buildPmcAppointmentSubTab(),
-        ]),
-      ),
-    ]);
+  final ctrl = _stage0SubTabController;
+  if (ctrl == null) return const SizedBox.shrink();
+
+  final tabs = <Tab>[];
+  final views = <Widget>[];
+
+  if (_isAdmin) {
+    tabs.add(const Tab(
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(Icons.info_outline, size: 14),
+      SizedBox(width: 5),
+      Text('Project Info'),
+    ])));
+    views.add(_buildProjectInfoSubTab());
   }
+
+  tabs.addAll([
+    const Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(Icons.description_outlined, size: 14),
+      SizedBox(width: 5),
+      Text('PMC Application'),
+    ])),
+    const Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(Icons.person_pin_outlined, size: 14),
+      SizedBox(width: 5),
+      Text('PMC Appointment'),
+    ])),
+  ]);
+  views.addAll([
+    _buildPmcApplicationSubTab(),
+    _buildPmcAppointmentSubTab(),
+  ]);
+
+  // Rebuild controller with correct length if needed
+  if (ctrl.length != tabs.length) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _initStage0SubTabController();
+    });
+  }
+
+  return Column(children: [
+    Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+      ),
+      child: TabBar(
+        controller: ctrl,
+        isScrollable: true,
+        tabAlignment: TabAlignment.start,
+        labelColor: AppColors.primaryGreen,
+        unselectedLabelColor: const Color(0xFF94A3B8),
+        indicatorColor: AppColors.primaryGreen,
+        indicatorWeight: 2,
+        labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+        unselectedLabelStyle:
+            const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
+        tabs: tabs,
+      ),
+    ),
+    Expanded(child: TabBarView(controller: ctrl, children: views)),
+  ]);
+}
 
   Widget _buildProjectInfoSubTab() => _ProjectInfoForm(
         projectId: widget.projectId,
