@@ -8822,4 +8822,159 @@ static Future<Map<String, dynamic>> updateProcessTeam({
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STAGE 2.1 — MATERIAL STOCK / MATERIAL QUOTATION
+  // Paste this block inside the ApiService class (e.g. right before the
+  // closing brace of the class, after fetchDevProcessTeamMembers).
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ── Material Stock ──────────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> fetchMaterialStocks({
+    required int projectId,
+    int page = 1,
+    int perPage = 15,
+    String? search,
+  }) async {
+    final uri = Uri.parse(
+      '${ApiConstants.baseUrl}/api/mobile/material-stock/$projectId',
+    ).replace(queryParameters: {
+      'page': '$page',
+      'per_page': '$perPage',
+      if (search != null && search.isNotEmpty) 'search': search,
+    });
+    return _getRequest(uri.toString());
+  }
+
+  static Future<Map<String, dynamic>> fetchMaterialStock(
+      int projectId, int id) async {
+    return _getRequest(
+      '${ApiConstants.baseUrl}/api/mobile/material-stock/$projectId/$id',
+    );
+  }
+
+  static Future<String> fetchNextStockNo(int projectId) async {
+    final body = await _getRequest(
+      '${ApiConstants.baseUrl}/api/mobile/material-stock/$projectId/create',
+    );
+    return body['stock_no']?.toString() ?? '';
+  }
+
+  static Future<Map<String, dynamic>> createMaterialStock({
+    required int projectId,
+    required String registerMonth,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    return _postRequest(
+      fullUrl:
+          '${ApiConstants.baseUrl}/api/mobile/material-stock/$projectId',
+      body: {'register_month': registerMonth, 'items': items},
+    );
+  }
+
+  static Future<Map<String, dynamic>> updateMaterialStock({
+    required int projectId,
+    required int id,
+    required String registerMonth,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    return _postRequest(
+      fullUrl:
+          '${ApiConstants.baseUrl}/api/mobile/material-stock/$projectId/$id/update',
+      body: {'register_month': registerMonth, 'items': items},
+    );
+  }
+
+  static Future<void> deleteMaterialStock(int projectId, int id) async {
+    await _postRequest(
+      fullUrl:
+          '${ApiConstants.baseUrl}/api/mobile/material-stock/$projectId/$id/delete',
+      body: const {},
+    );
+  }
+
+  // ── Material Quotation ────────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> fetchMaterialQuotations({
+    required int projectId,
+    int page = 1,
+    int perPage = 15,
+    String? search,
+  }) async {
+    final uri = Uri.parse(
+      '${ApiConstants.baseUrl}/api/mobile/material-quotation/$projectId',
+    ).replace(queryParameters: {
+      'page': '$page',
+      'per_page': '$perPage',
+      if (search != null && search.isNotEmpty) 'search': search,
+    });
+    return _getRequest(uri.toString());
+  }
+
+  static Future<Map<String, dynamic>> fetchMaterialQuotation(
+      int projectId, int id) async {
+    return _getRequest(
+      '${ApiConstants.baseUrl}/api/mobile/material-quotation/$projectId/$id',
+    );
+  }
+
+  static Future<String> fetchNextQuotationNo(int projectId) async {
+    final body = await _getRequest(
+      '${ApiConstants.baseUrl}/api/mobile/material-quotation/$projectId/create',
+    );
+    return body['quotation_no']?.toString() ?? '';
+  }
+
+  static Future<Map<String, dynamic>> createMaterialQuotation({
+    required int projectId,
+    required String registerMonth,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    return _postRequest(
+      fullUrl:
+          '${ApiConstants.baseUrl}/api/mobile/material-quotation/$projectId',
+      body: {'register_month': registerMonth, 'items': items},
+    );
+  }
+
+  static Future<Map<String, dynamic>> updateMaterialQuotation({
+    required int projectId,
+    required int id,
+    required String registerMonth,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    return _postRequest(
+      fullUrl:
+          '${ApiConstants.baseUrl}/api/mobile/material-quotation/$projectId/$id/update',
+      body: {'register_month': registerMonth, 'items': items},
+    );
+  }
+
+  static Future<void> deleteMaterialQuotation(int projectId, int id) async {
+    await _postRequest(
+      fullUrl:
+          '${ApiConstants.baseUrl}/api/mobile/material-quotation/$projectId/$id/delete',
+      body: const {},
+    );
+  }
+
+  // ── Stage 2.1 — project-scoped fetch for the dev-process page tab ──────────
+  // GET /api/mobile/development-process/project/{projectId}/stage21
+  // Mirrors fetchDevProjectProcesses; expected shape:
+  //   { success, stock_count, quotation_count }
+  static Future<Map<String, dynamic>> fetchStage21Summary(
+      int projectId) async {
+    try {
+      return await _getRequest(
+        '${ApiConstants.baseUrl}/api/mobile/development-process/project/$projectId/stage21',
+      );
+    } catch (e) {
+      // Non-fatal: tab can still open and load its own lists even if the
+      // summary counts fail to load.
+      developer.log('[ApiService] fetchStage21Summary error: $e',
+          name: 'ApiService');
+      return {};
+    }
+  }
+
 }

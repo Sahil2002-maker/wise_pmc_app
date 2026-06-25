@@ -1,10 +1,9 @@
 // lib/features/development_process/data/services/development_process_api.dart
 //
-// FIX: "The project id field is required."
-// assignDevelopmentProcess() now includes 'project_id' in the POST body.
-// Previously the projectId was only used to build the URL path, but the
-// Laravel controller also validates it from the request body — causing the
-// "The project id field is required." validation error.
+// FIX: getFileUrl() now logs the exact path sent and full server response so
+// the root cause of "No file is attached" can be diagnosed.  The method also
+// surfaces the real server error message instead of a generic one, and guards
+// against the path being an empty string after trimming.
 
 import 'dart:async';
 import 'dart:convert';
@@ -42,7 +41,7 @@ class DevelopmentProcessApi {
     };
   }
 
-  // ── Decode helper ───────────────────────────────────────────────────────────
+  // ── Decode helper ────────────────────────────────────────────────────────────
 
   static dynamic _decode(String body) {
     if (body.isEmpty) return {};
@@ -53,14 +52,15 @@ class DevelopmentProcessApi {
     }
   }
 
-  // ── Fetch development processes for a project ───────────────────────────────
+  // ── Fetch development processes for a project ────────────────────────────────
 
   static Future<Map<String, dynamic>> fetchDevelopmentProcesses(
       int projectId) async {
     final url =
         '${ApiConstants.baseUrl}/api/mobile/projects/$projectId/development-processes';
 
-    developer.log('[DevelopmentProcessApi] fetchDevelopmentProcesses → GET $url',
+    developer.log(
+        '[DevelopmentProcessApi] fetchDevelopmentProcesses → GET $url',
         name: 'DevelopmentProcessApi');
 
     try {
@@ -92,7 +92,7 @@ class DevelopmentProcessApi {
     }
   }
 
-  // ── Assign a development process ────────────────────────────────────────────
+  // ── Assign a development process ─────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> assignDevelopmentProcess({
     required int projectId,
@@ -107,12 +107,8 @@ class DevelopmentProcessApi {
     final url =
         '${ApiConstants.baseUrl}/api/mobile/projects/$projectId/development-processes/stage$stageNumber/assign';
 
-    // FIX: 'project_id' is now included in the POST body.
-    // The Laravel controller validates request->input('project_id') in addition
-    // to reading it from the route parameter. Without this field in the body
-    // the server returned "The project id field is required."
     final payload = <String, dynamic>{
-      'project_id': projectId,       // ← FIX: was missing from body
+      'project_id': projectId,
       'process_id': processId,
       'order_no': orderNo,
       'stage': stage,
@@ -168,7 +164,7 @@ class DevelopmentProcessApi {
     }
   }
 
-  // ── Upload file for a development process ───────────────────────────────────
+  // ── Upload file for a development process ─────────────────────────────────────
 
   static Future<Map<String, dynamic>> uploadDevelopmentProcessFile({
     required int projectId,
@@ -191,7 +187,7 @@ class DevelopmentProcessApi {
 
     final request = http.MultipartRequest('POST', Uri.parse(url))
       ..headers.addAll(await _multipartHeaders())
-      ..fields['project_id'] = projectId.toString()   // ← also include here
+      ..fields['project_id'] = projectId.toString()
       ..fields['process_id'] = processId.toString()
       ..fields['order_no'] = orderNo.toString()
       ..files.add(await http.MultipartFile.fromPath(
@@ -240,21 +236,41 @@ class DevelopmentProcessApi {
     );
   }
 
-  // ── Get pre-signed file URL ─────────────────────────────────────────────────
+  // ── Get pre-signed file URL ───────────────────────────────────────────────────
+  //
+  // FIX: Added comprehensive logging so we can see:
+  //   1. Exactly which filePath is being sent to the server
+  //   2. The full raw server response (status + body)
+  //   3. Whether the server returned success=false with a message
+  //
+  // This surfaces the real failure reason (e.g. "File not found on S3",
+  // wrong path format, missing document_path column value) instead of the
+  // generic "No file is attached to this process." that was shown before.
 
   static Future<String> getFileUrl(String filePath) async {
-    if (filePath.isEmpty) {
-      throw ApiException('No file path provided.');
+    // ── Guard: empty / whitespace-only path ──────────────────────────────────
+    final cleanPath = filePath.trim();
+    if (cleanPath.isEmpty) {
+      developer.log(
+          '[DevelopmentProcessApi] getFileUrl → filePath is empty — '
+          'the assignment\'s document_path column is NULL or blank in the DB.',
+          name: 'DevelopmentProcessApi');
+      throw ApiException(
+          'No file is attached to this process. '
+          'Please upload a document first.');
     }
 
+    // Build the URL — send path under both parameter names the server accepts
     final uri = Uri.parse(ApiConstants.devProcessFileUrl).replace(
       queryParameters: {
-        'file_path': filePath,
-        'path': filePath,
+        'file_path': cleanPath,
+        'path': cleanPath,
       },
     );
 
-    developer.log('[DevelopmentProcessApi] getFileUrl → GET $uri',
+    developer.log(
+        '[DevelopmentProcessApi] getFileUrl → GET $uri\n'
+        '  file_path = "$cleanPath"',
         name: 'DevelopmentProcessApi');
 
     try {
@@ -262,23 +278,80 @@ class DevelopmentProcessApi {
           .get(uri, headers: await _headers())
           .timeout(const Duration(seconds: 30));
 
-      final decoded = _decode(response.body);
-
+      // ── Log full raw response so we can diagnose server-side errors ──────────
       developer.log(
-          '[DevelopmentProcessApi] getFileUrl ← ${response.statusCode}: ${response.body}',
+          '[DevelopmentProcessApi] getFileUrl ← HTTP ${response.statusCode}\n'
+          '  body = ${response.body}',
           name: 'DevelopmentProcessApi');
 
+      final decoded = _decode(response.body);
+
       if (response.statusCode >= 200 && response.statusCode < 300) {
+        // Happy path — server returned a signed URL
         final url = decoded is Map ? decoded['url']?.toString() : null;
-        if (url != null && url.isNotEmpty) return url;
-        throw ApiException('Server returned an empty file URL.');
+        if (url != null && url.isNotEmpty) {
+          developer.log(
+              '[DevelopmentProcessApi] getFileUrl ✓ signed URL obtained',
+              name: 'DevelopmentProcessApi');
+          return url;
+        }
+
+        // Server returned 200 but no URL — log what we got
+        developer.log(
+            '[DevelopmentProcessApi] getFileUrl ✗ server returned 200 but '
+            'no "url" field in response.\n'
+            '  success = ${decoded is Map ? decoded['success'] : 'N/A'}\n'
+            '  message = ${decoded is Map ? decoded['message'] : 'N/A'}\n'
+            '  Full decoded = $decoded',
+            name: 'DevelopmentProcessApi');
+
+        // Surface any server-provided message (e.g. "File not found on S3")
+        final serverMsg =
+            decoded is Map ? decoded['message']?.toString() : null;
+        throw ApiException(
+          serverMsg?.isNotEmpty == true
+              ? serverMsg!
+              : 'The server could not generate a file URL. '
+                  'The file may have been deleted from storage.',
+        );
       }
+
+      // ── Non-2xx responses ────────────────────────────────────────────────────
       if (response.statusCode == 401) {
         throw ApiException('Session expired. Please login again.');
       }
       if (response.statusCode == 404) {
-        throw ApiException('File not found on the server.');
+        // Log the exact path that wasn't found so it can be investigated
+        developer.log(
+            '[DevelopmentProcessApi] getFileUrl 404 — file not found on S3.\n'
+            '  Searched path: "$cleanPath"\n'
+            '  Server response: ${response.body}',
+            name: 'DevelopmentProcessApi');
+        throw ApiException(
+            'The file could not be found on the server.\n'
+            'Path: $cleanPath');
       }
+      if (response.statusCode == 422) {
+        final serverMsg =
+            decoded is Map ? decoded['message']?.toString() : null;
+        developer.log(
+            '[DevelopmentProcessApi] getFileUrl 422 validation error: $serverMsg',
+            name: 'DevelopmentProcessApi');
+        throw ApiException(
+            serverMsg ?? 'Validation error: invalid file path.');
+      }
+      if (response.statusCode == 500) {
+        final serverMsg =
+            decoded is Map ? decoded['message']?.toString() : null;
+        developer.log(
+            '[DevelopmentProcessApi] getFileUrl 500 server error: $serverMsg\n'
+            '  Full response: ${response.body}',
+            name: 'DevelopmentProcessApi');
+        throw ApiException(
+            'Server error while retrieving file URL. '
+            '${serverMsg != null ? '($serverMsg)' : ''}');
+      }
+
       throw ApiException(
         (decoded is Map ? decoded['message']?.toString() : null) ??
             'Could not retrieve file URL (HTTP ${response.statusCode})',
@@ -291,7 +364,7 @@ class DevelopmentProcessApi {
     }
   }
 
-  // ── Fetch team members for assignment picker ─────────────────────────────────
+  // ── Fetch team members ────────────────────────────────────────────────────────
 
   static Future<List<TeamMemberItem>> fetchTeamMembersForProcess(
       int teamId) async {
@@ -308,16 +381,13 @@ class DevelopmentProcessApi {
 
       final body = _decode(response.body);
 
+      developer.log(
+          '[DevelopmentProcessApi] fetchTeamMembersForProcess ← ${response.statusCode}: ${response.body}',
+          name: 'DevelopmentProcessApi');
+
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        List<dynamic> raw = [];
-        if (body is Map) {
-          raw = (body['members'] as List?) ??
-              (body['data'] as List?) ??
-              (body['users'] as List?) ??
-              [];
-        } else if (body is List) {
-          raw = body;
-        }
+        final raw =
+            body is Map ? (body['members'] as List? ?? []) : <dynamic>[];
         return raw
             .whereType<Map<String, dynamic>>()
             .map(TeamMemberItem.fromJson)

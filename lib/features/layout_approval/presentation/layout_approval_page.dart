@@ -50,11 +50,13 @@ const _stageColors = {
 class LayoutApprovalPage extends StatefulWidget {
   final int projectId;
   final String projectName;
+  final bool showHeader; 
 
   const LayoutApprovalPage({
     super.key,
     required this.projectId,
     required this.projectName,
+    this.showHeader = true,
   });
 
   @override

@@ -2,7 +2,7 @@ name: wise_pmc_app
 description: "Wise PMC App"
 publish_to: 'none'
 
-version: 1.0.0+4
+version: 1.0.0+12
 
 environment:
   sdk: ^3.5.0
@@ -29,6 +29,8 @@ dependencies:
   share_plus: ^10.0.2
   pdf: ^3.11.0
   intl: ^0.19.0
+  geolocator: ^13.0.3        # GPS capture for photo geo-tagging
+  image_picker: ^1.1.2       # Camera / gallery picker
   printing: ^5.13.4
   firebase_core: ^2.0.0
   firebase_messaging: ^14.0.0

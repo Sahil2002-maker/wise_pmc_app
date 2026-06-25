@@ -21,8 +21,8 @@ import '../../../process_list/presentation/pages/process_list_page.dart';
 import '../../../process/presentation/pages/process_management_page.dart';
 import '../../../development_process/presentation/pages/dev_process_page.dart';
 
-// ↓ NEW: import the employee dashboard page
 import 'employee_dashboard_page.dart';
+import 'team_leader_dashboard_page.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -33,8 +33,10 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage>
     with SingleTickerProviderStateMixin {
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  final TextEditingController searchController = TextEditingController();
+  final GlobalKey<ScaffoldState> _scaffoldKey =
+      GlobalKey<ScaffoldState>();
+  final TextEditingController searchController =
+      TextEditingController();
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
 
@@ -44,9 +46,9 @@ class _DashboardPageState extends State<DashboardPage>
   bool isLoading = true;
   String? errorMessage;
 
-  String userName    = 'Admin';
-  String userRole    = 'admin';
-  int    userId      = 0;
+  String userName = 'Admin';
+  String userRole = 'admin';
+  int userId = 0;
   List<String> permissions = [];
 
   @override
@@ -73,15 +75,20 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Future<void> _loadLocalUser() async {
-    final savedName        = await AuthStorageService.getUserName();
-    final savedRole        = await AuthStorageService.getUserRole();
-    final savedUserId      = await AuthStorageService.getUserId();
-    final savedPermissions = await AuthStorageService.getPermissions();
+    final savedName = await AuthStorageService.getUserName();
+    final savedRole = await AuthStorageService.getUserRole();
+    final savedUserId = await AuthStorageService.getUserId();
+    final savedPermissions =
+        await AuthStorageService.getPermissions();
     if (!mounted) return;
     setState(() {
-      userName    = (savedName == null || savedName.isEmpty) ? 'Admin' : savedName;
-      userRole    = (savedRole == null || savedRole.isEmpty) ? 'admin' : savedRole;
-      userId      = savedUserId ?? 0;
+      userName = (savedName == null || savedName.isEmpty)
+          ? 'Admin'
+          : savedName;
+      userRole = (savedRole == null || savedRole.isEmpty)
+          ? 'admin'
+          : savedRole;
+      userId = savedUserId ?? 0;
       permissions = savedPermissions;
     });
   }
@@ -89,11 +96,10 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _loadDashboard() async {
     try {
       setState(() {
-        isLoading    = true;
+        isLoading = true;
         errorMessage = null;
       });
 
-      // Non-admin roles use EmployeeDashboardPage — no project fetch needed here
       if (!_isAdminRole) {
         if (!mounted) return;
         setState(() => isLoading = false);
@@ -103,16 +109,16 @@ class _DashboardPageState extends State<DashboardPage>
       final projects = await ApiService.fetchDashboardProjects();
       if (!mounted) return;
       setState(() {
-        allProjects      = projects;
+        allProjects = projects;
         filteredProjects = projects;
-        isLoading        = false;
+        isLoading = false;
       });
       _animationController.forward();
     } catch (e) {
       if (!mounted) return;
       setState(() {
         errorMessage = e.toString();
-        isLoading    = false;
+        isLoading = false;
       });
     }
   }
@@ -129,9 +135,21 @@ class _DashboardPageState extends State<DashboardPage>
     });
   }
 
-  void _openDrawer() => _scaffoldKey.currentState?.openDrawer();
+  void _openDrawer() =>
+      _scaffoldKey.currentState?.openDrawer();
 
-  bool get _isAdminRole => userRole.trim().toLowerCase() == 'admin';
+  /// Returns true only for the admin role.
+  bool get _isAdminRole =>
+      userRole.trim().toLowerCase() == 'admin';
+
+  /// Returns true for any team-leader variant.
+  bool get _isTeamLeaderRole {
+    final n = userRole
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[-_ ]'), '');
+    return n == 'teamleader' || n == 'leader' || n == 'tl';
+  }
 
   void _navigateTo(Widget page) => Navigator.push(
         context,
@@ -143,39 +161,44 @@ class _DashboardPageState extends State<DashboardPage>
       context,
       MaterialPageRoute(
         builder: (_) => ProcessListPage(
-          projectId:   project.id,
+          projectId: project.id,
           projectName: project.societyName,
         ),
       ),
     );
   }
 
-  void _openProjectList()   => _navigateTo(const ProjectListPage());
-  void _openGeneralTasks()  => _navigateTo(const GeneralTasksPage());
-  void _openTaskCalendar()  => _navigateTo(const TaskCalendarPage());
-  void _openAllTasks()      => _navigateTo(const AllTasksPage());
-  void _openWorkReports()   => _navigateTo(const WorkReportsPage());
-  void _openProjectReport() => _navigateTo(const ProjectReportPage());
-  void _openTeamReport()    => _navigateTo(const TeamReportPage());
-  void _openStageReport()   => _navigateTo(const StageReportPage());
-
-  void _openReDevelopmentProcess() => _navigateTo(
-        const ProcessManagementPage(),
-      );
-
-  void _openDevelopmentProcess() => _navigateTo(
-        const DevProcessPage(),
-      );
+  void _openProjectList() =>
+      _navigateTo(const ProjectListPage());
+  void _openGeneralTasks() =>
+      _navigateTo(const GeneralTasksPage());
+  void _openTaskCalendar() =>
+      _navigateTo(const TaskCalendarPage());
+  void _openAllTasks() => _navigateTo(const AllTasksPage());
+  void _openWorkReports() =>
+      _navigateTo(const WorkReportsPage());
+  void _openProjectReport() =>
+      _navigateTo(const ProjectReportPage());
+  void _openTeamReport() =>
+      _navigateTo(const TeamReportPage());
+  void _openStageReport() =>
+      _navigateTo(const StageReportPage());
+  void _openReDevelopmentProcess() =>
+      _navigateTo(const ProcessManagementPage());
+  void _openDevelopmentProcess() =>
+      _navigateTo(const DevProcessPage());
 
   void _showComingSoon(String title) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: AppColors.primaryGreen,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10)),
         content: Row(
           children: [
-            const Icon(Icons.info_outline, color: Colors.white, size: 18),
+            const Icon(Icons.info_outline,
+                color: Colors.white, size: 18),
             const SizedBox(width: 8),
             Text(
               '$title module coming soon',
@@ -187,40 +210,46 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  // ── Sidebar builder ───────────────────────────────────────────────────────
+  // ── Sidebar ───────────────────────────────────────────────────────────────
 
   DashboardSidebar _buildSidebar() {
     return DashboardSidebar(
-      userRole:                   userRole,
-      userId:                     userId,
-      permissions:                permissions,
-      onDashboardTap:             () {},
-      onProjectListTap:           _openProjectList,
-      onAllMeetingsTap:           () => _showComingSoon('All Meetings'),
-      onGeneralTasksTap:          _openGeneralTasks,
-      onTaskCalendarTap:          _openTaskCalendar,
-      onWorkReportsTap:           _openWorkReports,
-      onAllTasksTap:              _openAllTasks,
-      onReportsTap:               () => _showComingSoon('Reports'),
-      onEmployeeReportTap:        () => _navigateTo(const EmployeeReportPage()),
-      onProjectReportTap:         _openProjectReport,
-      onTeamReportTap:            _openTeamReport,
-      onStageReportTap:           _openStageReport,
-      onUserManagementTap:        () => _showComingSoon('User Management'),
-      onReDevelopmentProcessTap:  _openReDevelopmentProcess,
-      onDevelopmentProcessTap:    _openDevelopmentProcess,
+      userRole: userRole,
+      userId: userId,
+      permissions: permissions,
+      onDashboardTap: () {},
+      onProjectListTap: _openProjectList,
+      onAllMeetingsTap: () => _showComingSoon('All Meetings'),
+      onGeneralTasksTap: _openGeneralTasks,
+      onTaskCalendarTap: _openTaskCalendar,
+      onWorkReportsTap: _openWorkReports,
+      onAllTasksTap: _openAllTasks,
+      onReportsTap: () => _showComingSoon('Reports'),
+      onEmployeeReportTap: () =>
+          _navigateTo(const EmployeeReportPage()),
+      onProjectReportTap: _openProjectReport,
+      onTeamReportTap: _openTeamReport,
+      onStageReportTap: _openStageReport,
+      onUserManagementTap: () =>
+          _showComingSoon('User Management'),
+      onReDevelopmentProcessTap: _openReDevelopmentProcess,
+      onDevelopmentProcessTap: _openDevelopmentProcess,
     );
   }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
-    final isMobile    = screenWidth < 900;
+    final isMobile = screenWidth < 900;
 
     return Scaffold(
-      key:             _scaffoldKey,
+      key: _scaffoldKey,
       backgroundColor: const Color(0xFFF4F6FA),
-      drawer:          isMobile ? Drawer(child: _buildSidebar()) : null,
+      drawer: isMobile
+          ? Drawer(child: _buildSidebar())
+          : null,
       body: SafeArea(
         child: Row(
           children: [
@@ -228,19 +257,16 @@ class _DashboardPageState extends State<DashboardPage>
             Expanded(
               child: Column(
                 children: [
-                  // ── Header ──────────────────────────────────────────────
+                  // Fixed header
                   DashboardHeader(
-                    userName:       userName,
-                    userRole:       userRole,
+                    userName: userName,
+                    userRole: userRole,
                     showMenuButton: isMobile,
-                    onMenuTap:      isMobile ? _openDrawer : null,
+                    onMenuTap: isMobile ? _openDrawer : null,
                   ),
-
-                  // ── Body ────────────────────────────────────────────────
+                  // Scrollable body
                   Expanded(
-                    child: _isAdminRole
-                        ? _buildAdminBody(isMobile)
-                        : _buildNonAdminBody(), // ← CHANGED: was SizedBox.expand()
+                    child: _buildBody(isMobile),
                   ),
                 ],
               ),
@@ -251,82 +277,263 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  // ── Non-admin body (employee / team leader) ───────────────────────────────
-  // EmployeeDashboardPage handles both layouts via data.isTeamLeader internally.
+  // ── Body router ───────────────────────────────────────────────────────────
 
-  Widget _buildNonAdminBody() {
+  Widget _buildBody(bool isMobile) {
+    // Admin → project overview grid
+    if (_isAdminRole) return _buildAdminBody(isMobile);
+
+    // Team Leader → dedicated team-leader dashboard
+    if (_isTeamLeaderRole) {
+      return const TeamLeaderDashboardPage();
+    }
+
+    // Employee (and any other role) → employee dashboard
     return const EmployeeDashboardPage();
   }
 
   // ── Admin body ────────────────────────────────────────────────────────────
 
   Widget _buildAdminBody(bool isMobile) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        isMobile ? 16 : 24,
-        16,
-        isMobile ? 16 : 24,
-        0,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Stats summary row ──────────────────────────────────────────
-          if (!isLoading && errorMessage == null && allProjects.isNotEmpty)
-            _buildStatsSummary(isMobile),
+    final hPad = isMobile ? 16.0 : 24.0;
 
-          if (!isLoading && errorMessage == null && allProjects.isNotEmpty)
-            const SizedBox(height: 20),
+    if (isLoading) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(
+              color: AppColors.primaryGreen,
+              strokeWidth: 2.5,
+            ),
+            SizedBox(height: 14),
+            Text(
+              'Loading projects...',
+              style: TextStyle(
+                color: Color(0xFF8E9BB5),
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
-          // ── Section title + search ─────────────────────────────────────
-          Row(
+    if (errorMessage != null) {
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          margin: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Projects Overview',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF1A2340),
-                        letterSpacing: -0.3,
-                      ),
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF0F0),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(Icons.wifi_off_rounded,
+                    color: Color(0xFFE74C3C), size: 32),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Failed to load projects',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1A2340)),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                errorMessage!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: Color(0xFF8E9BB5), fontSize: 13),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: _loadDashboard,
+                icon: const Icon(Icons.refresh_rounded,
+                    size: 16),
+                label: const Text('Try Again'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryGreen,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  elevation: 0,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final screenW = MediaQuery.of(context).size.width;
+    final crossCount = screenW > 1400
+        ? 4
+        : screenW > 1100
+            ? 3
+            : 2;
+
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(
+              child: SizedBox(height: 16)),
+
+          if (allProjects.isNotEmpty)
+            SliverPadding(
+              padding:
+                  EdgeInsets.symmetric(horizontal: hPad),
+              sliver: SliverToBoxAdapter(
+                child:
+                    _buildStatsSummary(isMobile),
+              ),
+            ),
+
+          if (allProjects.isNotEmpty)
+            const SliverToBoxAdapter(
+                child: SizedBox(height: 20)),
+
+          SliverPadding(
+            padding:
+                EdgeInsets.symmetric(horizontal: hPad),
+            sliver: SliverToBoxAdapter(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Projects Overview',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF1A2340),
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${filteredProjects.length} active projects',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF8E9BB5),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 2),
+                  ),
+                  const SizedBox(width: 12),
+                  _buildSearchBar(),
+                ],
+              ),
+            ),
+          ),
+
+          const SliverToBoxAdapter(
+              child: SizedBox(height: 16)),
+
+          if (filteredProjects.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.search_off_rounded,
+                        size: 52,
+                        color: Color(0xFFCDD2DD)),
+                    SizedBox(height: 12),
                     Text(
-                      '${filteredProjects.length} active projects',
-                      style: const TextStyle(
-                        fontSize: 13,
+                      'No projects found',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
                         color: Color(0xFF8E9BB5),
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
-              _buildSearchBar(),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          Expanded(child: _buildProjectsBody(isMobile)),
+            )
+          else if (isMobile)
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(
+                  hPad, 0, hPad, 24),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (_, i) => Padding(
+                    padding: EdgeInsets.only(
+                        bottom: i < filteredProjects.length - 1
+                            ? 14
+                            : 0),
+                    child: ProjectCard(
+                      project: filteredProjects[i],
+                      onViewTap: () =>
+                          _openProcessList(
+                              filteredProjects[i]),
+                    ),
+                  ),
+                  childCount: filteredProjects.length,
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(
+                  hPad, 0, hPad, 24),
+              sliver: SliverGrid(
+                gridDelegate:
+                    SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: crossCount,
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: 0.95,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (_, i) => ProjectCard(
+                    project: filteredProjects[i],
+                    onViewTap: () =>
+                        _openProcessList(filteredProjects[i]),
+                  ),
+                  childCount: filteredProjects.length,
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  // ── Stats summary cards ───────────────────────────────────────────────────
+  // ── Stats summary ─────────────────────────────────────────────────────────
 
   Widget _buildStatsSummary(bool isMobile) {
-    final totalProjects  = allProjects.length;
-    final totalCompleted = allProjects.fold<int>(0, (s, p) => s + p.completedTasks);
-    final totalPending   = allProjects.fold<int>(0, (s, p) => s + p.pendingTasks);
-    final avgProgress    = allProjects.isEmpty
+    final totalProjects = allProjects.length;
+    final totalCompleted = allProjects
+        .fold<int>(0, (s, p) => s + p.completedTasks);
+    final totalPending = allProjects
+        .fold<int>(0, (s, p) => s + p.pendingTasks);
+    final avgProgress = allProjects.isEmpty
         ? 0
-        : (allProjects.fold<int>(0, (s, p) => s + p.progressPercentage) ~/
-            allProjects.length);
+        : (allProjects.fold<int>(
+                    0, (s, p) => s + p.progressPercentage) ~/
+                allProjects.length);
 
     final stats = [
       _StatData(
@@ -376,8 +583,7 @@ class _DashboardPageState extends State<DashboardPage>
           .map((s) => Expanded(
                 child: Padding(
                   padding: EdgeInsets.only(
-                    right: s == stats.last ? 0 : 14,
-                  ),
+                      right: s == stats.last ? 0 : 14),
                   child: _buildStatCard(s),
                 ),
               ))
@@ -387,7 +593,8 @@ class _DashboardPageState extends State<DashboardPage>
 
   Widget _buildStatCard(_StatData data) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding:
+          const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
@@ -462,197 +669,33 @@ class _DashboardPageState extends State<DashboardPage>
       ),
       child: TextField(
         controller: searchController,
-        style: const TextStyle(fontSize: 13, color: Color(0xFF1A2340)),
+        style: const TextStyle(
+            fontSize: 13, color: Color(0xFF1A2340)),
         decoration: InputDecoration(
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(vertical: 11),
+          contentPadding:
+              const EdgeInsets.symmetric(vertical: 11),
           hintText: 'Search projects...',
           hintStyle: const TextStyle(
             color: Color(0xFFB0BAC9),
             fontSize: 13,
           ),
-          prefixIcon: const Icon(
-            Icons.search_rounded,
-            color: Color(0xFFB0BAC9),
-            size: 18,
-          ),
+          prefixIcon: const Icon(Icons.search_rounded,
+              color: Color(0xFFB0BAC9), size: 18),
           suffixIcon: searchController.text.isNotEmpty
               ? GestureDetector(
                   onTap: () => searchController.clear(),
-                  child: const Icon(
-                    Icons.close_rounded,
-                    color: Color(0xFFB0BAC9),
-                    size: 16,
-                  ),
+                  child: const Icon(Icons.close_rounded,
+                      color: Color(0xFFB0BAC9), size: 16),
                 )
               : null,
         ),
       ),
     );
   }
-
-  // ── Projects body (admin only) ────────────────────────────────────────────
-
-  Widget _buildProjectsBody(bool isMobile) {
-    if (isLoading) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(
-              color: AppColors.primaryGreen,
-              strokeWidth: 2.5,
-            ),
-            const SizedBox(height: 14),
-            const Text(
-              'Loading projects...',
-              style: TextStyle(
-                color: Color(0xFF8E9BB5),
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (errorMessage != null) {
-      return Center(
-        child: Container(
-          padding: const EdgeInsets.all(28),
-          margin: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF0F0),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Icon(
-                  Icons.wifi_off_rounded,
-                  color: Color(0xFFE74C3C),
-                  size: 32,
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Failed to load projects',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF1A2340),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                errorMessage!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF8E9BB5),
-                  fontSize: 13,
-                ),
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton.icon(
-                onPressed: _loadDashboard,
-                icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('Try Again'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryGreen,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  elevation: 0,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (filteredProjects.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.search_off_rounded,
-              size: 52,
-              color: Color(0xFFCDD2DD),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'No projects found',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF8E9BB5),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (isMobile) {
-      return FadeTransition(
-        opacity: _fadeAnimation,
-        child: ListView.separated(
-          itemCount:        filteredProjects.length,
-          padding:          const EdgeInsets.only(bottom: 24),
-          separatorBuilder: (_, __) => const SizedBox(height: 14),
-          itemBuilder: (_, i) => ProjectCard(
-            project:   filteredProjects[i],
-            onViewTap: () => _openProcessList(filteredProjects[i]),
-          ),
-        ),
-      );
-    }
-
-    final crossCount = screenWidth(context) > 1400
-        ? 4
-        : screenWidth(context) > 1100
-            ? 3
-            : 2;
-
-    return FadeTransition(
-      opacity: _fadeAnimation,
-      child: GridView.builder(
-        itemCount: filteredProjects.length,
-        padding: const EdgeInsets.only(bottom: 24),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount:   crossCount,
-          crossAxisSpacing: 16,
-          mainAxisSpacing:  16,
-          childAspectRatio: 0.95,
-        ),
-        itemBuilder: (_, i) => ProjectCard(
-          project:   filteredProjects[i],
-          onViewTap: () => _openProcessList(filteredProjects[i]),
-        ),
-      ),
-    );
-  }
-
-  double screenWidth(BuildContext context) =>
-      MediaQuery.of(context).size.width;
 }
 
-// ── Internal helper model ──────────────────────────────────────────────────
+// ── Internal stat-card model ──────────────────────────────────────────────
 
 class _StatData {
   final String label;

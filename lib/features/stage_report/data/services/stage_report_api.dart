@@ -1,22 +1,18 @@
 // lib/features/stage_report/data/services/stage_report_api.dart
- 
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:http/http.dart' as http;
- 
+
+import '../../../../core/constants/api_constants.dart';
 import '../../../../core/services/auth_storage_service.dart';
 import '../../../../core/utils/api_exception.dart';
 import '../models/stage_report_models.dart';
- 
-/// Standalone API helper for Stage Report so it can be used
-/// without modifying the monolithic ApiService during integration.
-/// Once ready, move the two static methods into ApiService and
-/// the constants into ApiConstants following the project's convention.
+
 class StageReportApi {
-  static const String _base = 'https://test.pmc.wisehome.in/api/mobile';
   static const Duration _timeout = Duration(seconds: 30);
- 
+
   static Future<Map<String, String>> _headers() async {
     final token = await AuthStorageService.getToken();
     return {
@@ -26,7 +22,7 @@ class StageReportApi {
       if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
   }
- 
+
   static dynamic _decode(String body) {
     if (body.isEmpty) return {};
     try {
@@ -35,26 +31,23 @@ class StageReportApi {
       return {'message': body};
     }
   }
- 
-  // ── Project list for the dropdown ────────────────────────────────────────
- 
+
   static Future<List<StageReportProject>> fetchProjects() async {
-    final url = Uri.parse('$_base/stage-report/projects');
+    final url = Uri.parse(ApiConstants.stageReportProjects);
     developer.log('[StageReportApi] fetchProjects → GET $url',
         name: 'StageReportApi');
- 
+
     try {
       final response = await http
           .get(url, headers: await _headers())
           .timeout(_timeout);
- 
+
       final body = _decode(response.body);
       developer.log(
           '[StageReportApi] fetchProjects ← ${response.statusCode}',
           name: 'StageReportApi');
- 
+
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        // Accept both { data: [...] } and flat list
         List<dynamic> raw = [];
         if (body is List) {
           raw = body;
@@ -62,7 +55,6 @@ class StageReportApi {
           final d = body['data'] ?? body['projects'] ?? body['items'];
           if (d is List) raw = d;
         }
-        int idx = 1;
         return raw
             .whereType<Map>()
             .map((e) =>
@@ -70,11 +62,11 @@ class StageReportApi {
             .where((p) => p.id > 0 && p.societyName.isNotEmpty)
             .toList();
       }
- 
+
       if (response.statusCode == 401) {
         throw ApiException('Session expired. Please login again.');
       }
- 
+
       throw ApiException(
         (body is Map ? body['message']?.toString() : null) ??
             'Failed to load projects (${response.statusCode})',
@@ -86,9 +78,7 @@ class StageReportApi {
       throw ApiException('Stage report projects error: $e');
     }
   }
- 
-  // ── Stage report data (server-side DataTables-compatible) ────────────────
- 
+
   static Future<StageReportResponse> fetchReportData({
     int? projectId,
     int start = 0,
@@ -102,23 +92,23 @@ class StageReportApi {
       if (search.isNotEmpty) 'search[value]': search,
       if (projectId != null) 'project_id': projectId.toString(),
     };
- 
-    final url = Uri.parse('$_base/stage-report/data')
+
+    final url = Uri.parse(ApiConstants.stageReportData)
         .replace(queryParameters: params);
- 
+
     developer.log('[StageReportApi] fetchReportData → GET $url',
         name: 'StageReportApi');
- 
+
     try {
       final response = await http
           .get(url, headers: await _headers())
           .timeout(_timeout);
- 
+
       final body = _decode(response.body);
       developer.log(
           '[StageReportApi] fetchReportData ← ${response.statusCode}',
           name: 'StageReportApi');
- 
+
       if (response.statusCode >= 200 && response.statusCode < 300) {
         List<dynamic> rawData = [];
         if (body is Map) {
@@ -127,7 +117,7 @@ class StageReportApi {
         } else if (body is List) {
           rawData = body;
         }
- 
+
         final int total = body is Map
             ? (int.tryParse(
                     body['recordsTotal']?.toString() ??
@@ -135,7 +125,7 @@ class StageReportApi {
                         '0') ??
                 0)
             : rawData.length;
- 
+
         int srNo = start + 1;
         final rows = rawData
             .whereType<Map>()
@@ -144,7 +134,7 @@ class StageReportApi {
                   srNo: srNo++,
                 ))
             .toList();
- 
+
         return StageReportResponse(
           rows: rows,
           total: total,
@@ -152,11 +142,11 @@ class StageReportApi {
           lastPage: total == 0 ? 1 : ((total + length - 1) ~/ length),
         );
       }
- 
+
       if (response.statusCode == 401) {
         throw ApiException('Session expired. Please login again.');
       }
- 
+
       throw ApiException(
         (body is Map ? body['message']?.toString() : null) ??
             'Failed to load stage report (${response.statusCode})',

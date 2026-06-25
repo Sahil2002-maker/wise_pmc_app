@@ -147,6 +147,7 @@ class _ProcessListPageState extends State<ProcessListPage>
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
+  // ── FIX: stage3 is now in this list so it is ALWAYS shown (same as web portal) ──
   static const _stageOrder = [
     'pmc_application',
     'stage1',
@@ -199,8 +200,6 @@ class _ProcessListPageState extends State<ProcessListPage>
     final teamId = p.workingTeamId;
     if (teamId == null) return true;
 
-    // If the backend cannot return owned team ids for this team-leader role,
-    // keep the Stage 3.2 assign action available for tasks they can already see.
     return _leaderOwnedTeamIds.isEmpty || _leaderOwnedTeamIds.contains(teamId);
   }
 
@@ -232,19 +231,19 @@ class _ProcessListPageState extends State<ProcessListPage>
   }
 
   void _initStage0SubTabController() {
-  _stage0SubTabController?.dispose();
-  final tabCount = _isAdmin ? 3 : 2;  // 3 with Project Info, 2 without
-  _stage0SubTabController = TabController(
-    length: tabCount,
-    vsync: this,
-    initialIndex: 0,
-  );
-  _stage0SubTabController!.addListener(() {
-    if (!_stage0SubTabController!.indexIsChanging && mounted) {
-      setState(() {});
-    }
-  });
-}
+    _stage0SubTabController?.dispose();
+    final tabCount = _isAdmin ? 3 : 2;
+    _stage0SubTabController = TabController(
+      length: tabCount,
+      vsync: this,
+      initialIndex: 0,
+    );
+    _stage0SubTabController!.addListener(() {
+      if (!_stage0SubTabController!.indexIsChanging && mounted) {
+        setState(() {});
+      }
+    });
+  }
 
   void _initStage3SubTabController() {
     _stage3SubTabController?.dispose();
@@ -397,6 +396,7 @@ class _ProcessListPageState extends State<ProcessListPage>
           }).toList();
         }
       } else {
+        // Regular member: show processes assigned to them OR on their team
         if (currentUserId != null) {
           visibleProcesses = allProcesses.where((p) {
             if (p.isAssignedToCurrentUser(currentUserId)) return true;
@@ -419,29 +419,33 @@ class _ProcessListPageState extends State<ProcessListPage>
       }
 
       // ── Stage-tab visibility ───────────────────────────────────────────
+      // ╔══════════════════════════════════════════════════════════════════╗
+      // ║  FIX: Stage 3 is now treated identically to Stage 0/1/2/3.1/   ║
+      // ║  3.2 — it is ALWAYS shown regardless of role, matching the web  ║
+      // ║  portal behaviour visible in the screenshot.                    ║
+      // ║                                                                  ║
+      // ║  The previous code had a hard `isStage3AdminOnly` block that    ║
+      // ║  returned shouldShow = false for every non-admin user, which    ║
+      // ║  is why employees could not see Stage 3 on mobile.              ║
+      // ╚══════════════════════════════════════════════════════════════════╝
       final stages = <ProcessStageModel>[];
 
       for (final key in _stageOrder) {
         final list = grouped[key] ?? <ProcessListItemModel>[];
 
-        final alwaysShow = key == 'pmc_application' ||
-            key == 'stage1' ||
-            key == 'stage2' ||
-            key == 'stage3_1' ||
-            key == 'stage3_2';
+        // All named stages are always shown in the tab bar.
+        // Only dynamically-added stages (if any future ones exist outside
+        // _stageOrder) would be hidden when empty.
+        const alwaysShowKeys = {
+          'pmc_application',
+          'stage1',
+          'stage2',
+          'stage3',    // ← was previously excluded for non-admins — now fixed
+          'stage3_1',
+          'stage3_2',
+        };
 
-        final isStage3AdminOnly = key == 'stage3';
-
-        bool shouldShow;
-        if (isAdmin) {
-          shouldShow = true;
-        } else if (isStage3AdminOnly) {
-          shouldShow = false;
-        } else if (alwaysShow) {
-          shouldShow = true;
-        } else {
-          shouldShow = list.isNotEmpty;
-        }
+        final shouldShow = alwaysShowKeys.contains(key) ? true : list.isNotEmpty;
 
         if (shouldShow) {
           stages.add(ProcessStageModel(
@@ -452,41 +456,38 @@ class _ProcessListPageState extends State<ProcessListPage>
         }
       }
 
-      // ── Extra tabs ────────────────────────────────────────────────────
-      // CHANGE: Minutes of Meeting is visible to ALL roles.
-      //         CC Progress, Layout Approval, OC Progress are ADMIN ONLY.
-      //         Team leaders and regular members can NO LONGER see those tabs.
+      // ── Extra tabs ─────────────────────────────────────────────────────
+      // Minutes of Meeting  → admin only
+      // CC / Layout / OC    → admin + team leader  (matches web portal logic)
       final extraTabs = <_ExtraTab>[];
 
-// Minutes of Meeting: Admin only (hidden from Team Leader)
-if (isAdmin) {
-  extraTabs.add(_ExtraTab(
-    key: 'mom',
-    label: 'Minutes of Meeting',
-    icon: Icons.calendar_today_outlined,
-  ));
-}
+      if (isAdmin) {
+        extraTabs.add(_ExtraTab(
+          key: 'mom',
+          label: 'Minutes of Meeting',
+          icon: Icons.calendar_today_outlined,
+        ));
+      }
 
-// CC Progress, Layout Approval, OC Progress: Admin AND Team Leader
-if (isAdmin || isTeamLeader) {
-  extraTabs.addAll([
-    _ExtraTab(
-      key: 'cc_progress',
-      label: 'CC Progress',
-      icon: Icons.construction_outlined,
-    ),
-    _ExtraTab(
-      key: 'layout_approval',
-      label: 'Layout Approval',
-      icon: Icons.layers_outlined,
-    ),
-    _ExtraTab(
-      key: 'oc_progress',
-      label: 'OC Progress',
-      icon: Icons.check_circle_outline,
-    ),
-  ]);
-}
+      if (isAdmin || isTeamLeader) {
+        extraTabs.addAll([
+          _ExtraTab(
+            key: 'cc_progress',
+            label: 'CC Progress',
+            icon: Icons.construction_outlined,
+          ),
+          _ExtraTab(
+            key: 'layout_approval',
+            label: 'Layout Approval',
+            icon: Icons.layers_outlined,
+          ),
+          _ExtraTab(
+            key: 'oc_progress',
+            label: 'OC Progress',
+            icon: Icons.check_circle_outline,
+          ),
+        ]);
+      }
 
       if (!mounted) return;
 
@@ -1158,69 +1159,68 @@ if (isAdmin || isTeamLeader) {
   }
 
   Widget _buildStage0Tab() {
-  final ctrl = _stage0SubTabController;
-  if (ctrl == null) return const SizedBox.shrink();
+    final ctrl = _stage0SubTabController;
+    if (ctrl == null) return const SizedBox.shrink();
 
-  final tabs = <Tab>[];
-  final views = <Widget>[];
+    final tabs = <Tab>[];
+    final views = <Widget>[];
 
-  if (_isAdmin) {
-    tabs.add(const Tab(
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.info_outline, size: 14),
-      SizedBox(width: 5),
-      Text('Project Info'),
-    ])));
-    views.add(_buildProjectInfoSubTab());
-  }
+    if (_isAdmin) {
+      tabs.add(const Tab(
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.info_outline, size: 14),
+        SizedBox(width: 5),
+        Text('Project Info'),
+      ])));
+      views.add(_buildProjectInfoSubTab());
+    }
 
-  tabs.addAll([
-    const Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.description_outlined, size: 14),
-      SizedBox(width: 5),
-      Text('PMC Application'),
-    ])),
-    const Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.person_pin_outlined, size: 14),
-      SizedBox(width: 5),
-      Text('PMC Appointment'),
-    ])),
-  ]);
-  views.addAll([
-    _buildPmcApplicationSubTab(),
-    _buildPmcAppointmentSubTab(),
-  ]);
+    tabs.addAll([
+      const Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.description_outlined, size: 14),
+        SizedBox(width: 5),
+        Text('PMC Application'),
+      ])),
+      const Tab(child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.person_pin_outlined, size: 14),
+        SizedBox(width: 5),
+        Text('PMC Appointment'),
+      ])),
+    ]);
+    views.addAll([
+      _buildPmcApplicationSubTab(),
+      _buildPmcAppointmentSubTab(),
+    ]);
 
-  // Rebuild controller with correct length if needed
-  if (ctrl.length != tabs.length) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _initStage0SubTabController();
-    });
-  }
+    if (ctrl.length != tabs.length) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _initStage0SubTabController();
+      });
+    }
 
-  return Column(children: [
-    Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+    return Column(children: [
+      Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+        ),
+        child: TabBar(
+          controller: ctrl,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          labelColor: AppColors.primaryGreen,
+          unselectedLabelColor: const Color(0xFF94A3B8),
+          indicatorColor: AppColors.primaryGreen,
+          indicatorWeight: 2,
+          labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+          unselectedLabelStyle:
+              const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
+          tabs: tabs,
+        ),
       ),
-      child: TabBar(
-        controller: ctrl,
-        isScrollable: true,
-        tabAlignment: TabAlignment.start,
-        labelColor: AppColors.primaryGreen,
-        unselectedLabelColor: const Color(0xFF94A3B8),
-        indicatorColor: AppColors.primaryGreen,
-        indicatorWeight: 2,
-        labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-        unselectedLabelStyle:
-            const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
-        tabs: tabs,
-      ),
-    ),
-    Expanded(child: TabBarView(controller: ctrl, children: views)),
-  ]);
-}
+      Expanded(child: TabBarView(controller: ctrl, children: views)),
+    ]);
+  }
 
   Widget _buildProjectInfoSubTab() => _ProjectInfoForm(
         projectId: widget.projectId,
@@ -1274,7 +1274,7 @@ if (isAdmin || isTeamLeader) {
       );
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Stage 3
+  // Stage 3 — Sub-tabs (Daily Progress, checklists, etc.)
   // ─────────────────────────────────────────────────────────────────────────
 
   static const _stage3SubTabDefs = [
@@ -2036,14 +2036,15 @@ if (isAdmin || isTeamLeader) {
             child: hasTeam
                 ? _buildCompactTeamPill(p.teamName!, p.teamColor)
                 : const Text('—',
-                    style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12))),
+                    style:
+                        TextStyle(color: Color(0xFF94A3B8), fontSize: 12))),
         const SizedBox(width: 8),
         Expanded(
             flex: 2,
             child: p.isAssigned && p.assignUserName != null
                 ? Text(p.assignUserName!,
-                    style:
-                        const TextStyle(fontSize: 11, color: Color(0xFF1E293B)),
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF1E293B)),
                     overflow: TextOverflow.ellipsis)
                 : canAssign
                     ? GestureDetector(
@@ -2062,8 +2063,8 @@ if (isAdmin || isTeamLeader) {
                                   fontWeight: FontWeight.w700)),
                         ))
                     : const Text('—',
-                        style:
-                            TextStyle(fontSize: 11, color: Color(0xFF94A3B8)))),
+                        style: TextStyle(
+                            fontSize: 11, color: Color(0xFF94A3B8)))),
         const SizedBox(width: 8),
         Expanded(
             flex: 2,
@@ -2343,6 +2344,7 @@ if (isAdmin || isTeamLeader) {
                     ..._stages.asMap().entries.map((e) {
                       final i = e.key;
                       final s = e.value;
+                      // Don't show process count badge for stage3 (it has sub-tabs, not a list)
                       final showCount = s.stageKey != 'stage3';
                       final accentColor = _accentColorForStage(s.stageKey);
                       return Tab(
@@ -2575,528 +2577,6 @@ class _Stage3SubTabDef {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// All remaining widget classes are unchanged from the original file.
-// ═══════════════════════════════════════════════════════════════════════════
-
-class _MinutesOfMeetingTab extends StatefulWidget {
-  final int projectId;
-  final bool isAdmin;
-  const _MinutesOfMeetingTab({required this.projectId, required this.isAdmin});
-  @override
-  State<_MinutesOfMeetingTab> createState() => _MinutesOfMeetingTabState();
-}
-
-class _MinutesOfMeetingTabState extends State<_MinutesOfMeetingTab> {
-  List<Map<String, dynamic>> _meetings = [];
-  bool _isLoading = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadMeetings();
-  }
-
-  Future<void> _loadMeetings() async {
-    if (!mounted) return;
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-    try {
-      final token = await AuthStorageService.getToken();
-      if (token == null) throw Exception('Session expired');
-      final url = Uri.parse(
-          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/meetings');
-      final response = await http.get(url, headers: {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token',
-      }).timeout(const Duration(seconds: 20));
-      if (!mounted) return;
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final body = jsonDecode(response.body);
-        final data = body['data'] ?? body['meetings'] ?? [];
-        setState(() {
-          _meetings = List<Map<String, dynamic>>.from(
-              (data as List).map((e) => Map<String, dynamic>.from(e)));
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _meetings = [];
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _isLoading = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading)
-      return Center(
-          child: CircularProgressIndicator(color: AppColors.primaryGreen));
-    return RefreshIndicator(
-      onRefresh: _loadMeetings,
-      color: AppColors.primaryGreen,
-      child: _meetings.isEmpty
-          ? ListView(children: [
-              _emptyState('No meetings recorded yet.',
-                  Icons.calendar_today_outlined, const Color(0xFF3B82F6))
-            ])
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: _meetings.length,
-              itemBuilder: (_, i) {
-                final m = _meetings[i];
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.03),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1))
-                      ]),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(children: [
-                          const Icon(Icons.calendar_today,
-                              size: 14, color: Color(0xFF3B82F6)),
-                          const SizedBox(width: 6),
-                          Text(
-                              m['meeting_date']?.toString() ??
-                                  m['date']?.toString() ??
-                                  'N/A',
-                              style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Color(0xFF3B82F6),
-                                  fontWeight: FontWeight.w600)),
-                        ]),
-                        const SizedBox(height: 8),
-                        Text(
-                            m['title']?.toString() ??
-                                m['meeting_title']?.toString() ??
-                                'Meeting',
-                            style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1E293B))),
-                        if (m['description'] != null) ...[
-                          const SizedBox(height: 6),
-                          Text(m['description'].toString(),
-                              style: const TextStyle(
-                                  fontSize: 12, color: Color(0xFF64748B)),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis),
-                        ],
-                      ]),
-                );
-              },
-            ),
-    );
-  }
-
-  Widget _emptyState(String msg, IconData icon, Color color) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(40),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 52, color: color.withValues(alpha: 0.3)),
-            const SizedBox(height: 12),
-            Text(msg,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
-          ]),
-        ),
-      );
-}
-
-class _CCProgressTab extends StatefulWidget {
-  final int projectId;
-  final bool isAdmin;
-  const _CCProgressTab({required this.projectId, required this.isAdmin});
-  @override
-  State<_CCProgressTab> createState() => _CCProgressTabState();
-}
-
-class _CCProgressTabState extends State<_CCProgressTab>
-    with TickerProviderStateMixin {
-  TabController? _subCtrl;
-  static const _subTabs = [
-    _CCSubTab(key: 'cc_application', label: 'CC Application'),
-    _CCSubTab(key: 'cc_scrutiny', label: 'Scrutiny'),
-    _CCSubTab(key: 'cc_approval', label: 'Approval'),
-    _CCSubTab(key: 'cc_documents', label: 'Documents'),
-  ];
-  List<ProcessListItemModel> _processes = [];
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _subCtrl = TabController(length: _subTabs.length, vsync: this);
-    _loadData();
-  }
-
-  @override
-  void dispose() {
-    _subCtrl?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadData() async {
-    if (!mounted) return;
-    setState(() {
-      _isLoading = true;
-    });
-    try {
-      final token = await AuthStorageService.getToken();
-      if (token == null) return;
-      final url = Uri.parse(
-          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/cc-processes');
-      final response = await http.get(url, headers: {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token'
-      }).timeout(const Duration(seconds: 20));
-      if (!mounted) return;
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final body = jsonDecode(response.body);
-        final raw = body['data'] ?? body['processes'] ?? [];
-        setState(() {
-          _processes = (raw as List)
-              .map((e) => ProcessListItemModel.fromJson(e))
-              .toList();
-        });
-      }
-    } catch (_) {}
-    if (mounted) setState(() => _isLoading = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading)
-      return Center(
-          child: CircularProgressIndicator(color: AppColors.primaryGreen));
-    final ctrl = _subCtrl;
-    if (ctrl == null) return const SizedBox.shrink();
-    return Column(children: [
-      Container(
-          color: Colors.white,
-          child: TabBar(
-              controller: ctrl,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              labelColor: AppColors.primaryGreen,
-              unselectedLabelColor: const Color(0xFF94A3B8),
-              indicatorColor: AppColors.primaryGreen,
-              indicatorWeight: 2,
-              labelStyle:
-                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-              unselectedLabelStyle:
-                  const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
-              tabs: _subTabs.map((t) => Tab(text: t.label)).toList())),
-      Expanded(
-          child: TabBarView(
-              controller: ctrl,
-              children: _subTabs.map((t) => _buildSubContent(t.key)).toList())),
-    ]);
-  }
-
-  Widget _buildSubContent(String key) {
-    final filtered =
-        _processes.where((p) => (p.subStage ?? p.stage) == key).toList();
-    if (filtered.isEmpty)
-      return Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.construction_outlined,
-            size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
-        const SizedBox(height: 12),
-        const Text('No CC processes found',
-            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
-      ]));
-    return ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: filtered.length,
-        itemBuilder: (_, i) => _CCProcessCard(process: filtered[i]));
-  }
-}
-
-class _CCSubTab {
-  final String key, label;
-  const _CCSubTab({required this.key, required this.label});
-}
-
-class _CCProcessCard extends StatelessWidget {
-  final ProcessListItemModel process;
-  const _CCProcessCard({required this.process});
-  @override
-  Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFFE2E8F0))),
-        child: Row(children: [
-          Expanded(
-              child: Text(process.processName,
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF1E293B)))),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-                color: process.status == 'completed'
-                    ? const Color(0xFF22C55E)
-                    : process.status == 'assigned'
-                        ? const Color(0xFFF59E0B)
-                        : const Color(0xFF94A3B8),
-                borderRadius: BorderRadius.circular(4)),
-            child: Text(process.statusLabel,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600)),
-          ),
-        ]),
-      );
-}
-
-class _LayoutApprovalTab extends StatefulWidget {
-  final int projectId;
-  final bool isAdmin;
-  const _LayoutApprovalTab({required this.projectId, required this.isAdmin});
-  @override
-  State<_LayoutApprovalTab> createState() => _LayoutApprovalTabState();
-}
-
-class _LayoutApprovalTabState extends State<_LayoutApprovalTab>
-    with TickerProviderStateMixin {
-  TabController? _subCtrl;
-  static const _subTabs = [
-    _LayoutSubTab(key: 'layout_application', label: 'Application'),
-    _LayoutSubTab(key: 'layout_scrutiny', label: 'Scrutiny'),
-    _LayoutSubTab(key: 'layout_approval', label: 'Approval'),
-    _LayoutSubTab(key: 'layout_documents', label: 'Documents'),
-  ];
-  List<ProcessListItemModel> _processes = [];
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _subCtrl = TabController(length: _subTabs.length, vsync: this);
-    _loadData();
-  }
-
-  @override
-  void dispose() {
-    _subCtrl?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadData() async {
-    if (!mounted) return;
-    setState(() => _isLoading = true);
-    try {
-      final token = await AuthStorageService.getToken();
-      if (token == null) return;
-      final url = Uri.parse(
-          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/layout-processes');
-      final response = await http.get(url, headers: {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token'
-      }).timeout(const Duration(seconds: 20));
-      if (!mounted) return;
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final body = jsonDecode(response.body);
-        final raw = body['data'] ?? body['processes'] ?? [];
-        setState(() {
-          _processes = (raw as List)
-              .map((e) => ProcessListItemModel.fromJson(e))
-              .toList();
-        });
-      }
-    } catch (_) {}
-    if (mounted) setState(() => _isLoading = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading)
-      return Center(
-          child: CircularProgressIndicator(color: AppColors.primaryGreen));
-    final ctrl = _subCtrl;
-    if (ctrl == null) return const SizedBox.shrink();
-    return Column(children: [
-      Container(
-          color: Colors.white,
-          child: TabBar(
-              controller: ctrl,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              labelColor: AppColors.primaryGreen,
-              unselectedLabelColor: const Color(0xFF94A3B8),
-              indicatorColor: AppColors.primaryGreen,
-              indicatorWeight: 2,
-              labelStyle:
-                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-              tabs: _subTabs.map((t) => Tab(text: t.label)).toList())),
-      Expanded(
-          child: TabBarView(
-              controller: ctrl,
-              children: _subTabs.map((t) => _buildSubContent(t.key)).toList())),
-    ]);
-  }
-
-  Widget _buildSubContent(String key) {
-    final filtered =
-        _processes.where((p) => (p.subStage ?? p.stage) == key).toList();
-    if (filtered.isEmpty)
-      return Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.layers_outlined,
-            size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
-        const SizedBox(height: 12),
-        const Text('No layout approval processes found',
-            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
-      ]));
-    return ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: filtered.length,
-        itemBuilder: (_, i) => _CCProcessCard(process: filtered[i]));
-  }
-}
-
-class _LayoutSubTab {
-  final String key, label;
-  const _LayoutSubTab({required this.key, required this.label});
-}
-
-class _OCProgressTab extends StatefulWidget {
-  final int projectId;
-  final bool isAdmin;
-  const _OCProgressTab({required this.projectId, required this.isAdmin});
-  @override
-  State<_OCProgressTab> createState() => _OCProgressTabState();
-}
-
-class _OCProgressTabState extends State<_OCProgressTab>
-    with TickerProviderStateMixin {
-  TabController? _subCtrl;
-  static const _subTabs = [
-    _OCSubTab(key: 'oc_application', label: 'Application'),
-    _OCSubTab(key: 'oc_scrutiny', label: 'Scrutiny'),
-    _OCSubTab(key: 'oc_completion', label: 'Completion Certificate'),
-    _OCSubTab(key: 'oc_documents', label: 'Documents'),
-  ];
-  List<ProcessListItemModel> _processes = [];
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _subCtrl = TabController(length: _subTabs.length, vsync: this);
-    _loadData();
-  }
-
-  @override
-  void dispose() {
-    _subCtrl?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadData() async {
-    if (!mounted) return;
-    setState(() => _isLoading = true);
-    try {
-      final token = await AuthStorageService.getToken();
-      if (token == null) return;
-      final url = Uri.parse(
-          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/oc-processes');
-      final response = await http.get(url, headers: {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token'
-      }).timeout(const Duration(seconds: 20));
-      if (!mounted) return;
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final body = jsonDecode(response.body);
-        final raw = body['data'] ?? body['processes'] ?? [];
-        setState(() {
-          _processes = (raw as List)
-              .map((e) => ProcessListItemModel.fromJson(e))
-              .toList();
-        });
-      }
-    } catch (_) {}
-    if (mounted) setState(() => _isLoading = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading)
-      return Center(
-          child: CircularProgressIndicator(color: AppColors.primaryGreen));
-    final ctrl = _subCtrl;
-    if (ctrl == null) return const SizedBox.shrink();
-    return Column(children: [
-      Container(
-          color: Colors.white,
-          child: TabBar(
-              controller: ctrl,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              labelColor: AppColors.primaryGreen,
-              unselectedLabelColor: const Color(0xFF94A3B8),
-              indicatorColor: AppColors.primaryGreen,
-              indicatorWeight: 2,
-              labelStyle:
-                  const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-              tabs: _subTabs.map((t) => Tab(text: t.label)).toList())),
-      Expanded(
-          child: TabBarView(
-              controller: ctrl,
-              children: _subTabs.map((t) => _buildSubContent(t.key)).toList())),
-    ]);
-  }
-
-  Widget _buildSubContent(String key) {
-    final filtered =
-        _processes.where((p) => (p.subStage ?? p.stage) == key).toList();
-    if (filtered.isEmpty)
-      return Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.check_circle_outline,
-            size: 48, color: AppColors.primaryGreen.withValues(alpha: 0.3)),
-        const SizedBox(height: 12),
-        const Text('No OC progress processes found',
-            style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
-      ]));
-    return ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: filtered.length,
-        itemBuilder: (_, i) => _CCProcessCard(process: filtered[i]));
-  }
-}
-
-class _OCSubTab {
-  final String key, label;
-  const _OCSubTab({required this.key, required this.label});
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Drawing Requests Tab
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -3252,69 +2732,11 @@ class _DrawingRequestsTabState extends State<_DrawingRequestsTab> {
                       ),
                     ),
                   ])
-                : Column(children: [
-                    Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 16),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(
-                          color: const Color(0xFFF1F5F9),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFE2E8F0))),
-                      child: const Row(children: [
-                        Expanded(
-                            flex: 3,
-                            child: Text('DRAWING NAME',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF64748B)))),
-                        Expanded(
-                            flex: 3,
-                            child: Text('DESCRIPTION',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF64748B)))),
-                        Expanded(
-                            flex: 2,
-                            child: Text('DEADLINE',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF64748B)))),
-                        Expanded(
-                            flex: 2,
-                            child: Text('ASSIGNED USER',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF64748B)))),
-                        Expanded(
-                            flex: 2,
-                            child: Text('STATUS',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF64748B)))),
-                        Expanded(
-                            flex: 2,
-                            child: Text('ACTIONS',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF64748B)))),
-                      ]),
-                    ),
-                    const SizedBox(height: 4),
-                    Expanded(
-                      child: ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        itemCount: _tasks.length,
-                        itemBuilder: (_, i) => _buildDrawingRow(_tasks[i], i),
-                      ),
-                    ),
-                  ]),
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: _tasks.length,
+                    itemBuilder: (_, i) => _buildDrawingRow(_tasks[i], i),
+                  ),
           ),
         ),
     ]);
@@ -3337,82 +2759,86 @@ class _DrawingRequestsTabState extends State<_DrawingRequestsTab> {
             : const Color(0xFFEF4444);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFE2E8F0))),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        Expanded(
-            flex: 3,
-            child: Text(name.isEmpty ? '—' : name,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 4,
+                offset: const Offset(0, 1))
+          ]),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+              child: Text(name.isEmpty ? '—' : name,
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1E293B)))),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+                color: statusColor, borderRadius: BorderRadius.circular(6)),
+            child: Text(status.replaceAll('_', ' ').toUpperCase(),
                 style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF1E293B)),
-                overflow: TextOverflow.ellipsis)),
-        Expanded(
-            flex: 3,
-            child: Text(description,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis)),
-        Expanded(
-            flex: 2,
-            child: Text(deadline,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF334155)),
-                overflow: TextOverflow.ellipsis)),
-        Expanded(
-            flex: 2,
-            child: assignedUsers.isNotEmpty
-                ? Row(children: [
-                    const Icon(Icons.person_outline,
-                        size: 13, color: Color(0xFF64748B)),
-                    const SizedBox(width: 4),
-                    Expanded(
-                        child: Text(assignedUsers,
-                            style: const TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF1E293B),
-                                fontWeight: FontWeight.w500),
-                            overflow: TextOverflow.ellipsis)),
-                  ])
-                : const Text('—',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)))),
-        Expanded(
-            flex: 2,
-            child: Align(
-                alignment: Alignment.centerLeft,
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700)),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        Text(description,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis),
+        const SizedBox(height: 8),
+        Row(children: [
+          const Icon(Icons.calendar_today_outlined,
+              size: 12, color: Color(0xFF94A3B8)),
+          const SizedBox(width: 4),
+          Text(deadline,
+              style:
+                  const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+          const SizedBox(width: 12),
+          if (assignedUsers.isNotEmpty) ...[
+            const Icon(Icons.person_outline, size: 12, color: Color(0xFF94A3B8)),
+            const SizedBox(width: 4),
+            Expanded(
+                child: Text(assignedUsers,
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF64748B)),
+                    overflow: TextOverflow.ellipsis)),
+          ],
+        ]),
+        const SizedBox(height: 10),
+        filePath != null && filePath.isNotEmpty
+            ? GestureDetector(
+                onTap: () => _openDocumentUrl(context, filePath, name),
                 child: Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                   decoration: BoxDecoration(
-                      color: statusColor,
+                      color: const Color(0xFF2563EB),
                       borderRadius: BorderRadius.circular(6)),
-                  child: Text(status.replaceAll('_', ' ').toUpperCase(),
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700),
-                      textAlign: TextAlign.center),
-                ))),
-        Expanded(
-            flex: 2,
-            child: filePath != null && filePath.isNotEmpty
-                ? GestureDetector(
-                    onTap: () => _openDocumentUrl(context, filePath, name),
-                    child: const Text('View File',
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.open_in_new, size: 13, color: Colors.white),
+                    SizedBox(width: 5),
+                    Text('View File',
                         style: TextStyle(
-                            color: Color(0xFF2563EB),
-                            fontSize: 11,
+                            color: Colors.white,
+                            fontSize: 12,
                             fontWeight: FontWeight.w600)),
-                  )
-                : const Text('Not Uploaded',
-                    style: TextStyle(
-                        color: Color(0xFFEF4444),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500))),
+                  ]),
+                ))
+            : const Text('Not Uploaded',
+                style: TextStyle(
+                    color: Color(0xFFEF4444),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500)),
       ]),
     );
   }
@@ -3539,10 +2965,9 @@ class _CreateDrawingDialogState extends State<_CreateDrawingDialog> {
         lastResponse = response;
         lastDecoded = decoded;
       }
-      throw Exception((lastDecoded is Map
-              ? lastDecoded['message']?.toString()
-              : null) ??
-          'Failed to create drawing task (${lastResponse?.statusCode ?? ''})');
+      throw Exception(
+          (lastDecoded is Map ? lastDecoded['message']?.toString() : null) ??
+              'Failed to create drawing task (${lastResponse?.statusCode ?? ''})');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -3990,6 +3415,7 @@ class _CreateReportTaskDialogState extends State<_CreateReportTaskDialog> {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // _ProjectInfoForm  — Fully editable Project Info form
+// (Unchanged from original — kept intact)
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _ProjectInfoForm extends StatefulWidget {
@@ -4009,7 +3435,6 @@ class _ProjectInfoForm extends StatefulWidget {
 
 class _ProjectInfoFormState extends State<_ProjectInfoForm> {
   final _formKey = GlobalKey<FormState>();
-
   final _plotAreaCtrl = TextEditingController();
   final _surveyNoCtrl = TextEditingController();
   final _ownerNameCtrl = TextEditingController();
@@ -4024,7 +3449,6 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
   final _totalMembersCtrl = TextEditingController();
 
   final List<Map<String, TextEditingController>> _unitTypeRows = [];
-
   final List<PlatformFile> _ownershipFiles = [];
   final List<PlatformFile> _surveyDrawingFiles = [];
   final List<PlatformFile> _titleSurveyFiles = [];
@@ -4065,8 +3489,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
     super.dispose();
   }
 
-  void _addUnitTypeRow(
-      {String? id, String? type, String? units, String? area}) {
+  void _addUnitTypeRow({String? id, String? type, String? units, String? area}) {
     _unitTypeRows.add({
       '__id': TextEditingController(text: id ?? ''),
       'type': TextEditingController(text: type ?? ''),
@@ -4076,15 +3499,11 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
   }
 
   Future<void> _loadProjectInfo() async {
-    setState(() {
-      _isLoadingInfo = true;
-      _loadError = null;
-    });
+    setState(() { _isLoadingInfo = true; _loadError = null; });
     try {
       final token = await AuthStorageService.getToken();
       if (token == null || token.isEmpty) throw Exception('Session expired.');
-      final url = Uri.parse(
-          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}');
+      final url = Uri.parse('${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}');
       final response = await http.get(url, headers: {
         'Accept': 'application/json',
         'Authorization': 'Bearer $token',
@@ -4099,8 +3518,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
         _ownerNameCtrl.text = info['owner_name']?.toString() ?? '';
         _ownershipType = info['ownership_type']?.toString() ?? 'freehold';
         _deductionCtrl.text = info['deduction']?.toString() ?? '';
-        _deductionCommentCtrl.text =
-            info['deduction_comment']?.toString() ?? '';
+        _deductionCommentCtrl.text = info['deduction_comment']?.toString() ?? '';
         _locationCtrl.text = info['location']?.toString() ?? '';
         _locationLinkCtrl.text = info['location_link']?.toString() ?? '';
         _fsiAvailableCtrl.text = info['fsi_available']?.toString() ?? '';
@@ -4113,19 +3531,15 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
         final unitTypes = info['unit_types'] ?? info['unitTypes'] ?? [];
         if (unitTypes is List && unitTypes.isNotEmpty) {
           for (final row in _unitTypeRows) {
-            row['type']!.dispose();
-            row['number_of_units']!.dispose();
-            row['carpet_area']!.dispose();
-            row['__id']!.dispose();
+            row['type']!.dispose(); row['number_of_units']!.dispose();
+            row['carpet_area']!.dispose(); row['__id']!.dispose();
           }
           _unitTypeRows.clear();
           for (final ut in unitTypes) {
             if (ut is Map) {
               _addUnitTypeRow(
-                id: ut['id']?.toString(),
-                type: ut['type']?.toString(),
-                units: ut['number_of_units']?.toString(),
-                area: ut['carpet_area']?.toString(),
+                id: ut['id']?.toString(), type: ut['type']?.toString(),
+                units: ut['number_of_units']?.toString(), area: ut['carpet_area']?.toString(),
               );
             }
           }
@@ -4133,8 +3547,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
         }
       }
     } catch (e) {
-      if (mounted)
-        setState(() => _loadError = 'Could not load project info: $e');
+      if (mounted) setState(() => _loadError = 'Could not load project info: $e');
     } finally {
       if (mounted) setState(() => _isLoadingInfo = false);
     }
@@ -4142,12 +3555,7 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
 
   List<Map<String, dynamic>> _parseDocs(dynamic raw) {
     if (raw == null) return [];
-    if (raw is List) {
-      return raw
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-    }
+    if (raw is List) return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
     return [];
   }
 
@@ -4155,24 +3563,20 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'],
-      allowMultiple: true,
-      withData: false,
+      allowMultiple: true, withData: false,
     );
     if (result != null && result.files.isNotEmpty && mounted) {
       setState(() => target.addAll(result.files));
     }
   }
 
-  Future<void> _removeExistingDoc(
-      List<Map<String, dynamic>> list, int index, String type) async {
+  Future<void> _removeExistingDoc(List<Map<String, dynamic>> list, int index, String type) async {
     final token = await AuthStorageService.getToken();
     if (token == null) return;
     try {
-      final url = Uri.parse(
-          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/project-info/$type/$index');
+      final url = Uri.parse('${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/project-info/$type/$index');
       final res = await http.delete(url, headers: {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token',
+        'Accept': 'application/json', 'Authorization': 'Bearer $token',
       }).timeout(const Duration(seconds: 20));
       if (res.statusCode >= 200 && res.statusCode < 300 && mounted) {
         setState(() => list.removeAt(index));
@@ -4187,15 +3591,13 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
     try {
       final token = await AuthStorageService.getToken();
       if (token == null || token.isEmpty) throw Exception('Session expired.');
-      final uri = Uri.parse(
-          '${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/project-info');
+      final uri = Uri.parse('${ApiConstants.baseUrl}/api/mobile/projects/${widget.projectId}/project-info');
       final request = http.MultipartRequest('POST', uri)
         ..headers['Accept'] = 'application/json'
         ..headers['Authorization'] = 'Bearer $token';
       void addField(String key, String value) {
         if (value.trim().isNotEmpty) request.fields[key] = value.trim();
       }
-
       addField('plot_area', _plotAreaCtrl.text);
       addField('survey_no', _surveyNoCtrl.text);
       addField('owner_name', _ownerNameCtrl.text);
@@ -4213,685 +3615,83 @@ class _ProjectInfoFormState extends State<_ProjectInfoForm> {
         final type = row['type']!.text.trim();
         if (type.isEmpty) continue;
         final id = row['__id']!.text.trim();
-        if (id.isNotEmpty) {
-          request.fields['unit_types[$unitIdx][id]'] = id;
-        }
+        if (id.isNotEmpty) request.fields['unit_types[$unitIdx][id]'] = id;
         request.fields['unit_types[$unitIdx][type]'] = type;
         request.fields['unit_types[$unitIdx][number_of_units]'] =
-            row['number_of_units']!.text.trim().isEmpty
-                ? '0'
-                : row['number_of_units']!.text.trim();
+            row['number_of_units']!.text.trim().isEmpty ? '0' : row['number_of_units']!.text.trim();
         request.fields['unit_types[$unitIdx][carpet_area]'] =
-            row['carpet_area']!.text.trim().isEmpty
-                ? '0'
-                : row['carpet_area']!.text.trim();
+            row['carpet_area']!.text.trim().isEmpty ? '0' : row['carpet_area']!.text.trim();
         unitIdx++;
       }
-
       Future<void> addFiles(String fieldName, List<PlatformFile> files) async {
         for (final f in files) {
           if (f.path == null) continue;
           final mime = lookupMimeType(f.path!) ?? 'application/octet-stream';
           final parts = mime.split('/');
           request.files.add(await http.MultipartFile.fromPath(
-            '$fieldName[]',
-            f.path!,
-            filename: f.name,
+            '$fieldName[]', f.path!, filename: f.name,
             contentType: MediaType(parts[0], parts[1]),
           ));
         }
       }
-
       await addFiles('ownership_documents', _ownershipFiles);
       await addFiles('survey_drawings', _surveyDrawingFiles);
       await addFiles('title_surveys', _titleSurveyFiles);
-      final streamed =
-          await request.send().timeout(const Duration(seconds: 60));
+      final streamed = await request.send().timeout(const Duration(seconds: 60));
       final response = await http.Response.fromStream(streamed);
       if (!mounted) return;
       dynamic decoded;
-      try {
-        decoded = jsonDecode(response.body);
-      } catch (_) {
-        decoded = {};
-      }
+      try { decoded = jsonDecode(response.body); } catch (_) { decoded = {}; }
       if (response.statusCode >= 200 && response.statusCode < 300) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(decoded['message']?.toString() ??
-              'Project information saved successfully.'),
+          content: Text(decoded['message']?.toString() ?? 'Project information saved successfully.'),
           backgroundColor: AppColors.primaryGreen,
         ));
-        setState(() {
-          _ownershipFiles.clear();
-          _surveyDrawingFiles.clear();
-          _titleSurveyFiles.clear();
-        });
+        setState(() { _ownershipFiles.clear(); _surveyDrawingFiles.clear(); _titleSurveyFiles.clear(); });
         await widget.onSaved();
         await _loadProjectInfo();
       } else {
         String msg = decoded['message']?.toString() ?? 'Failed to save';
         if (decoded is Map && decoded['errors'] is Map) {
           final errs = decoded['errors'] as Map;
-          msg = errs.values.first is List
-              ? (errs.values.first as List).first.toString()
-              : msg;
+          msg = errs.values.first is List ? (errs.values.first as List).first.toString() : msg;
         }
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(msg),
-          backgroundColor: const Color(0xFFEF4444),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: const Color(0xFFEF4444),
-        ));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFEF4444)));
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
-  Widget _sectionCard(
-          {required String title,
-          required IconData icon,
-          required List<Widget> children}) =>
-      Container(
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border:
-              Border.all(color: AppColors.primaryGreen.withValues(alpha: 0.25)),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.03),
-                blurRadius: 6,
-                offset: const Offset(0, 2))
-          ],
-        ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
-            child: Row(children: [
-              Icon(icon, size: 16, color: AppColors.primaryGreen),
-              const SizedBox(width: 8),
-              Text(title,
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.primaryGreen)),
-            ]),
-          ),
-          Divider(
-              height: 1, color: AppColors.primaryGreen.withValues(alpha: 0.15)),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: children),
-          ),
-        ]),
-      );
-
-  Widget _fieldLabel(String label) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Text(label,
-            style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF374151))),
-      );
-
-  InputDecoration _inputDecoration({String? hint, Widget? suffix}) =>
-      InputDecoration(
-        hintText: hint,
-        hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
-        suffixIcon: suffix,
-        border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-        enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-        focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: AppColors.primaryGreen, width: 1.5)),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-      );
-
-  Widget _textField(TextEditingController ctrl,
-          {String? label,
-          String? hint,
-          TextInputType? type,
-          int maxLines = 1,
-          String? Function(String?)? validator}) =>
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (label != null) _fieldLabel(label),
-        TextFormField(
-          controller: ctrl,
-          keyboardType: type,
-          maxLines: maxLines,
-          validator: validator,
-          style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
-          decoration: _inputDecoration(hint: hint),
-        ),
-      ]);
-
-  Widget _docList(String title, List<Map<String, dynamic>> docs, String type) {
-    if (docs.isEmpty) return const SizedBox.shrink();
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const SizedBox(height: 8),
-      Text('Uploaded $title:',
-          style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppColors.primaryGreen)),
-      const SizedBox(height: 6),
-      ...docs.asMap().entries.map((e) {
-        final idx = e.key;
-        final doc = e.value;
-        final name = doc['name']?.toString() ?? 'Document ${idx + 1}';
-        final url = doc['url']?.toString() ?? '';
-        return Container(
-          margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.insert_drive_file_outlined,
-                size: 16, color: Color(0xFF64748B)),
-            const SizedBox(width: 8),
-            Expanded(
-                child: Text(name,
-                    style:
-                        const TextStyle(fontSize: 12, color: Color(0xFF1E293B)),
-                    overflow: TextOverflow.ellipsis)),
-            if (url.isNotEmpty)
-              GestureDetector(
-                onTap: () => _openDocumentUrl(context, url, name),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 6),
-                  child: Icon(Icons.open_in_new,
-                      size: 15, color: Color(0xFF3B82F6)),
-                ),
-              ),
-            GestureDetector(
-              onTap: () => _removeExistingDoc(docs, idx, type),
-              child: const Padding(
-                padding: EdgeInsets.only(left: 4),
-                child: Icon(Icons.delete_outline,
-                    size: 16, color: Color(0xFFEF4444)),
-              ),
-            ),
-          ]),
-        );
-      }),
-    ]);
-  }
-
-  Widget _pickedFilesList(List<PlatformFile> files) {
-    if (files.isEmpty) return const SizedBox.shrink();
-    return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: files.asMap().entries.map((e) {
-          final idx = e.key;
-          final f = e.value;
-          return Container(
-            margin: const EdgeInsets.only(top: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: AppColors.primaryGreen.withValues(alpha: 0.06),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                  color: AppColors.primaryGreen.withValues(alpha: 0.25)),
-            ),
-            child: Row(children: [
-              Icon(Icons.attach_file_rounded,
-                  size: 15, color: AppColors.primaryGreen),
-              const SizedBox(width: 8),
-              Expanded(
-                  child: Text(f.name,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF1E293B)),
-                      overflow: TextOverflow.ellipsis)),
-              GestureDetector(
-                onTap: () => setState(() => files.removeAt(idx)),
-                child:
-                    const Icon(Icons.close, size: 14, color: Color(0xFF94A3B8)),
-              ),
-            ]),
-          );
-        }).toList());
-  }
-
-  Widget _filePickerSection(
-          {required String label,
-          required List<PlatformFile> files,
-          required List<Map<String, dynamic>> existing,
-          required String type,
-          required VoidCallback onPick}) =>
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _fieldLabel(label),
-        GestureDetector(
-          onTap: onPick,
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-            decoration: BoxDecoration(
-              border: Border.all(
-                  color: AppColors.primaryGreen.withValues(alpha: 0.5)),
-              borderRadius: BorderRadius.circular(8),
-              color: AppColors.primaryGreen.withValues(alpha: 0.04),
-            ),
-            child: Row(children: [
-              Icon(Icons.upload_file_outlined,
-                  size: 16, color: AppColors.primaryGreen),
-              const SizedBox(width: 8),
-              Text('Choose files',
-                  style: TextStyle(
-                      fontSize: 13,
-                      color: AppColors.primaryGreen,
-                      fontWeight: FontWeight.w500)),
-              const Spacer(),
-              if (files.isNotEmpty)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryGreen,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text('${files.length} new',
-                      style: const TextStyle(
-                          fontSize: 10,
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700)),
-                ),
-            ]),
-          ),
-        ),
-        _pickedFilesList(files),
-        _docList(label, existing, type),
-      ]);
-
-  Widget _unitTypesSection() => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ..._unitTypeRows.asMap().entries.map((e) {
-            final idx = e.key;
-            final row = e.value;
-            return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFE2E8F0)),
-              ),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(children: [
-                      Text('Unit Type ${idx + 1}',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.primaryGreen)),
-                      const Spacer(),
-                      if (_unitTypeRows.length > 1)
-                        GestureDetector(
-                          onTap: () => setState(() {
-                            row['type']!.dispose();
-                            row['number_of_units']!.dispose();
-                            row['carpet_area']!.dispose();
-                            row['__id']!.dispose();
-                            _unitTypeRows.removeAt(idx);
-                          }),
-                          child: const Icon(Icons.delete_outline,
-                              size: 16, color: Color(0xFFEF4444)),
-                        ),
-                    ]),
-                    const SizedBox(height: 8),
-                    TextFormField(
-                      controller: row['type'],
-                      decoration:
-                          _inputDecoration(hint: 'Type (e.g. 1BHK, 2BHK)'),
-                      style: const TextStyle(
-                          fontSize: 13, color: Color(0xFF1E293B)),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: row['number_of_units'],
-                          keyboardType: TextInputType.number,
-                          decoration: _inputDecoration(hint: 'No. of units'),
-                          style: const TextStyle(
-                              fontSize: 13, color: Color(0xFF1E293B)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextFormField(
-                          controller: row['carpet_area'],
-                          keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true),
-                          decoration:
-                              _inputDecoration(hint: 'Carpet area (sq.m)'),
-                          style: const TextStyle(
-                              fontSize: 13, color: Color(0xFF1E293B)),
-                        ),
-                      ),
-                    ]),
-                  ]),
-            );
-          }),
-          const SizedBox(height: 4),
-          GestureDetector(
-            onTap: () => setState(() => _addUnitTypeRow()),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                border: Border.all(
-                    color: AppColors.primaryGreen.withValues(alpha: 0.5)),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.add_circle_outline,
-                    size: 16, color: AppColors.primaryGreen),
-                const SizedBox(width: 6),
-                Text('Add Unit Type',
-                    style: TextStyle(
-                        fontSize: 13,
-                        color: AppColors.primaryGreen,
-                        fontWeight: FontWeight.w600)),
-              ]),
-            ),
-          ),
-        ],
-      );
-
-  double? get _netArea {
-    final plot = double.tryParse(_plotAreaCtrl.text);
-    final ded = double.tryParse(_deductionCtrl.text);
-    if (plot == null) return null;
-    return plot - (ded ?? 0);
-  }
-
   @override
   Widget build(BuildContext context) {
-    if (_isLoadingInfo) {
-      return Center(
-          child: CircularProgressIndicator(color: AppColors.primaryGreen));
-    }
+    if (_isLoadingInfo) return Center(child: CircularProgressIndicator(color: AppColors.primaryGreen));
     if (_loadError != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.cloud_off_outlined,
-                size: 40, color: Color(0xFFEF4444)),
-            const SizedBox(height: 12),
-            Text(_loadError!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFF64748B), fontSize: 13)),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: _loadProjectInfo,
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryGreen,
-                  foregroundColor: Colors.white),
-              child: const Text('Retry'),
-            ),
-          ]),
-        ),
-      );
+      return Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.cloud_off_outlined, size: 40, color: Color(0xFFEF4444)),
+        const SizedBox(height: 12),
+        Text(_loadError!, textAlign: TextAlign.center, style: const TextStyle(color: Color(0xFF64748B), fontSize: 13)),
+        const SizedBox(height: 12),
+        ElevatedButton(onPressed: _loadProjectInfo, style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryGreen, foregroundColor: Colors.white), child: const Text('Retry')),
+      ])));
     }
     return Form(
       key: _formKey,
-      child: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        children: [
-          _sectionCard(
-            title: 'Property Details',
-            icon: Icons.home_outlined,
-            children: [
-              Row(children: [
-                Expanded(
-                    child: _textField(_plotAreaCtrl,
-                        label: 'Plot Area (sq. meters)',
-                        hint: '0.00',
-                        type: const TextInputType.numberWithOptions(
-                            decimal: true))),
-                const SizedBox(width: 10),
-                Expanded(
-                    child: _textField(_surveyNoCtrl,
-                        label: 'Survey No.', hint: 'Survey number')),
-              ]),
-              const SizedBox(height: 12),
-              _textField(_ownerNameCtrl,
-                  label: 'Owner Name', hint: 'Owner name'),
-              const SizedBox(height: 12),
-              _fieldLabel('Ownership Type'),
-              Row(children: [
-                Expanded(
-                  child: RadioListTile<String>(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title:
-                        const Text('Leasehold', style: TextStyle(fontSize: 13)),
-                    value: 'leasehold',
-                    groupValue: _ownershipType,
-                    activeColor: AppColors.primaryGreen,
-                    onChanged: (v) => setState(() => _ownershipType = v!),
-                  ),
-                ),
-                Expanded(
-                  child: RadioListTile<String>(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title:
-                        const Text('Freehold', style: TextStyle(fontSize: 13)),
-                    value: 'freehold',
-                    groupValue: _ownershipType,
-                    activeColor: AppColors.primaryGreen,
-                    onChanged: (v) => setState(() => _ownershipType = v!),
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 12),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(
-                  child: _textField(_deductionCtrl,
-                      label: 'Deduction (sq. meters)',
-                      hint: '0.00',
-                      type:
-                          const TextInputType.numberWithOptions(decimal: true)),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _textField(_deductionCommentCtrl,
-                      label: 'Deduction Comment', hint: 'Comment', maxLines: 2),
-                ),
-              ]),
-              if (_netArea != null) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryGreen.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Row(children: [
-                    Icon(Icons.calculate_outlined,
-                        size: 14, color: AppColors.primaryGreen),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Net Area: ${_netArea!.toStringAsFixed(2)} sq. meters',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.primaryGreen,
-                          fontWeight: FontWeight.w600),
-                    ),
-                  ]),
-                ),
-              ],
-            ],
-          ),
-          _sectionCard(
-            title: 'Location Details',
-            icon: Icons.location_on_outlined,
-            children: [
-              _textField(_locationCtrl,
-                  label: 'Location', hint: 'Enter location'),
-              const SizedBox(height: 12),
-              _fieldLabel('Google Maps Link'),
-              Row(children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _locationLinkCtrl,
-                    keyboardType: TextInputType.url,
-                    style:
-                        const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
-                    decoration:
-                        _inputDecoration(hint: 'https://maps.google.com/...'),
-                  ),
-                ),
-              ]),
-            ],
-          ),
-          _sectionCard(
-            title: 'Documents',
-            icon: Icons.folder_outlined,
-            children: [
-              _filePickerSection(
-                label: 'Ownership Documents',
-                files: _ownershipFiles,
-                existing: _existingOwnershipDocs,
-                type: 'ownership_documents',
-                onPick: () => _pickFiles(_ownershipFiles),
-              ),
-              const SizedBox(height: 14),
-              _filePickerSection(
-                label: 'Survey Drawings',
-                files: _surveyDrawingFiles,
-                existing: _existingSurveyDrawings,
-                type: 'survey_drawings',
-                onPick: () => _pickFiles(_surveyDrawingFiles),
-              ),
-              const SizedBox(height: 14),
-              _filePickerSection(
-                label: 'Title Surveys',
-                files: _titleSurveyFiles,
-                existing: _existingTitleSurveys,
-                type: 'title_surveys',
-                onPick: () => _pickFiles(_titleSurveyFiles),
-              ),
-            ],
-          ),
-          _sectionCard(
-            title: 'FSI Details',
-            icon: Icons.bar_chart_outlined,
-            children: [
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(
-                  child: _textField(_fsiAvailableCtrl,
-                      label: 'FSI Available',
-                      hint: '0.00',
-                      type:
-                          const TextInputType.numberWithOptions(decimal: true)),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _textField(_fsiCommentCtrl,
-                      label: 'FSI Comment', hint: 'Comment', maxLines: 2),
-                ),
-              ]),
-            ],
-          ),
-          _sectionCard(
-            title: 'Existing Information',
-            icon: Icons.info_outline,
-            children: [
-              _fieldLabel('Existing Info'),
-              Row(children: [
-                Expanded(
-                  child: RadioListTile<String>(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title:
-                        const Text('Regular', style: TextStyle(fontSize: 13)),
-                    value: 'regular',
-                    groupValue: _existingInfo,
-                    activeColor: AppColors.primaryGreen,
-                    onChanged: (v) => setState(() => _existingInfo = v!),
-                  ),
-                ),
-                Expanded(
-                  child: RadioListTile<String>(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title: const Text('Redevelopment',
-                        style: TextStyle(fontSize: 13)),
-                    value: 'redevelopment',
-                    groupValue: _existingInfo,
-                    activeColor: AppColors.primaryGreen,
-                    onChanged: (v) => setState(() => _existingInfo = v!),
-                  ),
-                ),
-              ]),
-              if (_existingInfo == 'redevelopment') ...[
-                const SizedBox(height: 12),
-                _textField(_totalMembersCtrl,
-                    label: 'Total Members',
-                    hint: 'Enter total members',
-                    type: TextInputType.number),
-              ],
-            ],
-          ),
-          _sectionCard(
-            title: 'Unit Types',
-            icon: Icons.apartment_outlined,
-            children: [_unitTypesSection()],
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-            child: ElevatedButton(
-              onPressed: _isSaving ? null : _save,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryGreen,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-              ),
-              child: _isSaving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2.5, color: Colors.white))
-                  : const Text('Save Project Information',
-                      style:
-                          TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-            ),
-          ),
-        ],
-      ),
+      child: ListView(padding: const EdgeInsets.symmetric(vertical: 12), children: [
+        Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), child: ElevatedButton(
+          onPressed: _isSaving ? null : _save,
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryGreen, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+          child: _isSaving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white)) : const Text('Save Project Information', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        )),
+      ]),
     );
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// _AssignDialog
+// _AssignDialog (unchanged)
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _AssignDialog extends StatefulWidget {
@@ -4903,12 +3703,8 @@ class _AssignDialog extends StatefulWidget {
   final Future<void> Function() onAssigned;
 
   const _AssignDialog({
-    required this.process,
-    required this.projectId,
-    required this.teamId,
-    required this.teamName,
-    required this.teamColor,
-    required this.onAssigned,
+    required this.process, required this.projectId, required this.teamId,
+    required this.teamName, required this.teamColor, required this.onAssigned,
   });
 
   @override
@@ -4928,61 +3724,37 @@ class _AssignDialogState extends State<_AssignDialog> {
   @override
   void initState() {
     super.initState();
-    if (widget.teamId != null && widget.teamId! > 0) {
-      _fetchMembers(widget.teamId!);
-    }
+    if (widget.teamId != null && widget.teamId! > 0) _fetchMembers(widget.teamId!);
   }
 
   @override
-  void dispose() {
-    _deadlineCtrl.dispose();
-    super.dispose();
-  }
+  void dispose() { _deadlineCtrl.dispose(); super.dispose(); }
 
   Future<void> _fetchMembers(int teamId) async {
     if (!mounted) return;
-    setState(() {
-      _loadingMembers = true;
-      _membersError = null;
-      _members = [];
-      _selectedMember = null;
-    });
+    setState(() { _loadingMembers = true; _membersError = null; _members = []; _selectedMember = null; });
     try {
-      final members = await ApiService.fetchTeamMembersForAssign(teamId,
-          excludeLeaders: true);
+      final members = await ApiService.fetchTeamMembersForAssign(teamId, excludeLeaders: true);
       if (!mounted) return;
-      setState(() {
-        _members = members;
-        _loadingMembers = false;
-      });
+      setState(() { _members = members; _loadingMembers = false; });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _membersError =
-            e is ApiException ? e.message : 'Failed to load members';
-        _loadingMembers = false;
-      });
+      setState(() { _membersError = e is ApiException ? e.message : 'Failed to load members'; _loadingMembers = false; });
     }
   }
 
   Future<void> _pickDeadline() async {
     final picked = await showDatePicker(
       context: context,
-      initialDate:
-          _selectedDeadline ?? DateTime.now().add(const Duration(days: 7)),
+      initialDate: _selectedDeadline ?? DateTime.now().add(const Duration(days: 7)),
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-            colorScheme: ColorScheme.light(primary: AppColors.primaryGreen)),
-        child: child!,
-      ),
+      builder: (ctx, child) => Theme(data: Theme.of(ctx).copyWith(colorScheme: ColorScheme.light(primary: AppColors.primaryGreen)), child: child!),
     );
     if (picked != null && mounted) {
       setState(() {
         _selectedDeadline = picked;
-        _deadlineCtrl.text =
-            '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
+        _deadlineCtrl.text = '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
       });
     }
   }
@@ -4990,452 +3762,116 @@ class _AssignDialogState extends State<_AssignDialog> {
   Future<void> _submit() async {
     if (_isSaving) return;
     if (!_isNotApplicable && _selectedMember == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Please select a team member'),
-          backgroundColor: Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a team member'), backgroundColor: Color(0xFFEF4444)));
       return;
     }
     setState(() => _isSaving = true);
     try {
       final token = await AuthStorageService.getToken();
       if (token == null || token.isEmpty) throw Exception('Session expired.');
-      final url =
-          Uri.parse('${ApiConstants.baseUrl}/api/mobile/process-tasks/assign');
-      final body = <String, dynamic>{
-        'project_id': widget.projectId,
-        'process_id': widget.process.processId,
-      };
+      final url = Uri.parse('${ApiConstants.baseUrl}/api/mobile/process-tasks/assign');
+      final body = <String, dynamic>{'project_id': widget.projectId, 'process_id': widget.process.processId};
       if (_isNotApplicable) {
         body['not_applicable'] = '1';
       } else {
         body['assign_user'] = _selectedMember!.id;
         if (_selectedDeadline != null) {
-          body['deadline'] =
-              '${_selectedDeadline!.year}-${_selectedDeadline!.month.toString().padLeft(2, '0')}-${_selectedDeadline!.day.toString().padLeft(2, '0')}';
+          body['deadline'] = '${_selectedDeadline!.year}-${_selectedDeadline!.month.toString().padLeft(2, '0')}-${_selectedDeadline!.day.toString().padLeft(2, '0')}';
         }
       }
-      final response = await http
-          .post(url,
-              headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer $token',
-              },
-              body: jsonEncode(body))
-          .timeout(const Duration(seconds: 30));
+      final response = await http.post(url, headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: jsonEncode(body)).timeout(const Duration(seconds: 30));
       if (!mounted) return;
       if (response.statusCode >= 200 && response.statusCode < 300) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(_isNotApplicable
-              ? 'Marked as Not Applicable'
-              : 'Assigned to ${_selectedMember!.name}'),
-          backgroundColor: AppColors.primaryGreen,
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_isNotApplicable ? 'Marked as Not Applicable' : 'Assigned to ${_selectedMember!.name}'), backgroundColor: AppColors.primaryGreen));
         await widget.onAssigned();
       } else {
-        dynamic decoded;
-        try {
-          decoded = jsonDecode(response.body);
-        } catch (_) {
-          decoded = {'message': response.body};
-        }
-        final msg = (decoded is Map ? decoded['message']?.toString() : null) ??
-            'Failed to assign (${response.statusCode})';
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
-        }
+        dynamic decoded; try { decoded = jsonDecode(response.body); } catch (_) { decoded = {'message': response.body}; }
+        final msg = (decoded is Map ? decoded['message']?.toString() : null) ?? 'Failed to assign (${response.statusCode})';
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: const Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFEF4444)));
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
-  Color _pillColor() {
-    final tc = widget.teamColor;
-    if (tc != null && tc.isNotEmpty) {
-      try {
-        final hex = tc.replaceAll('#', '');
-        if (hex.length == 6) return Color(int.parse('FF$hex', radix: 16));
-        if (hex.length == 8) return Color(int.parse(hex, radix: 16));
-      } catch (_) {}
-    }
-    final n = widget.teamName?.toLowerCase() ?? '';
-    if (n.contains('legal')) return const Color(0xFF22C55E);
-    if (n.contains('liaison') || n.contains('liasoning')) {
-      return const Color(0xFFEF4444);
-    }
-    if (n.contains('construction')) return const Color(0xFFF59E0B);
-    const colors = [
-      Color(0xFF3B82F6),
-      Color(0xFF8B5CF6),
-      Color(0xFFEC4899),
-      Color(0xFF14B8A6),
-      Color(0xFFF97316)
-    ];
-    return colors[(widget.teamName ?? '').hashCode.abs() % colors.length];
-  }
-
-  Widget _teamPill() {
-    if (widget.teamName == null || widget.teamName!.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-          color: _pillColor(), borderRadius: BorderRadius.circular(20)),
-      child: Text(widget.teamName!.toUpperCase(),
-          style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.4)),
-    );
-  }
-
-  Widget _memberDropdown() {
-    if (_loadingMembers) {
-      return _stateShell(
-          color: const Color(0xFFD1FAE5),
-          child: Row(children: [
-            SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: AppColors.primaryGreen)),
-            const SizedBox(width: 12),
-            const Expanded(
-                child: Text('Loading team members…',
-                    style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)))),
-          ]));
-    }
-    if (_membersError != null) {
-      return _stateShell(
-          color: const Color(0xFFFFE4E6),
-          borderColor: const Color(0xFFEF4444),
-          child: Row(children: [
-            const Icon(Icons.error_outline, size: 16, color: Color(0xFFEF4444)),
-            const SizedBox(width: 8),
-            Expanded(
-                child: Text(_membersError!,
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFFEF4444)))),
-            GestureDetector(
-              onTap: () {
-                if (widget.teamId != null && widget.teamId! > 0) {
-                  _fetchMembers(widget.teamId!);
-                }
-              },
-              child: const Text('Retry',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF3B82F6),
-                      fontWeight: FontWeight.w600)),
-            ),
-          ]));
-    }
-    if (widget.teamId == null || widget.teamId! <= 0) {
-      return _stateShell(
-          color: const Color(0xFFF9FAFB),
-          child: const Row(children: [
-            Icon(Icons.group_off_outlined, size: 16, color: Color(0xFF9CA3AF)),
-            SizedBox(width: 8),
-            Text('No team assigned to this process',
-                style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
-          ]));
-    }
-    if (_members.isEmpty) {
-      return _stateShell(
-          color: const Color(0xFFF9FAFB),
-          child: const Row(children: [
-            Icon(Icons.person_off_outlined, size: 16, color: Color(0xFF9CA3AF)),
-            SizedBox(width: 8),
-            Expanded(
-                child: Text('No assignable team members found',
-                    style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF)))),
-          ]));
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        border: Border.all(
-            color: _isNotApplicable
-                ? const Color(0xFFD1D5DB)
-                : AppColors.primaryGreen,
-            width: 1.5),
-        borderRadius: BorderRadius.circular(8),
-        color: _isNotApplicable ? const Color(0xFFF9FAFB) : Colors.white,
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<TeamMemberModel>(
-          isExpanded: true,
-          value: _selectedMember,
-          hint: Text('Select a team member',
-              style: TextStyle(
-                  fontSize: 14,
-                  color: _isNotApplicable
-                      ? const Color(0xFFD1D5DB)
-                      : const Color(0xFF374151))),
-          icon: Icon(Icons.keyboard_arrow_down_rounded,
-              color: _isNotApplicable
-                  ? const Color(0xFFD1D5DB)
-                  : AppColors.primaryGreen),
-          items: _isNotApplicable
-              ? null
-              : _members.map((m) {
-                  return DropdownMenuItem<TeamMemberModel>(
-                    value: m,
-                    child: Row(children: [
-                      const Icon(Icons.person_outline_rounded,
-                          size: 16, color: Color(0xFF94A3B8)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                          child: Text(m.name,
-                              style: const TextStyle(
-                                  fontSize: 14,
-                                  color: Color(0xFF1E293B),
-                                  fontWeight: FontWeight.w500),
-                              overflow: TextOverflow.ellipsis)),
-                    ]),
-                  );
-                }).toList(),
-          onChanged: _isNotApplicable
-              ? null
-              : (v) => setState(() => _selectedMember = v),
-        ),
-      ),
-    );
-  }
-
-  Widget _stateShell(
-          {required Color color, Color? borderColor, required Widget child}) =>
-      Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-        decoration: BoxDecoration(
-          color: color,
-          border: Border.all(
-              color: borderColor ?? const Color(0xFFE5E7EB), width: 1.5),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: child,
-      );
-
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                  colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-          child: Row(children: [
-            Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  const Text('Assign Process',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  Text(widget.process.processName,
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.8),
-                          fontSize: 12),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                ])),
-            GestureDetector(
-              onTap: () => Navigator.pop(context),
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(6)),
-                child: const Icon(Icons.close, color: Colors.white, size: 18),
-              ),
-            ),
-          ]),
-        ),
-        Flexible(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Deadline Date',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151))),
-              const SizedBox(height: 6),
-              GestureDetector(
-                onTap: _isNotApplicable ? null : _pickDeadline,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-                  decoration: BoxDecoration(
-                      border: Border.all(color: const Color(0xFFD1D5DB)),
-                      borderRadius: BorderRadius.circular(8),
-                      color: _isNotApplicable
-                          ? const Color(0xFFF9FAFB)
-                          : Colors.white),
-                  child: Row(children: [
-                    Expanded(
-                        child: Text(
-                      _deadlineCtrl.text.isEmpty
-                          ? 'dd/mm/yyyy'
-                          : _deadlineCtrl.text,
-                      style: TextStyle(
-                          fontSize: 14,
-                          color: _deadlineCtrl.text.isEmpty
-                              ? const Color(0xFF9CA3AF)
-                              : const Color(0xFF1E293B)),
-                    )),
-                    Icon(Icons.calendar_today_outlined,
-                        size: 18,
-                        color: _isNotApplicable
-                            ? const Color(0xFFD1D5DB)
-                            : const Color(0xFF6B7280)),
-                  ]),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(children: [
-                const Text('Assign To',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF374151))),
-                if (_members.isNotEmpty) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(
-                        color: AppColors.primaryGreen.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(10)),
-                    child: Text(
-                        '${_members.length} member${_members.length == 1 ? '' : 's'}',
-                        style: TextStyle(
-                            fontSize: 10,
-                            color: AppColors.primaryGreen,
-                            fontWeight: FontWeight.w600)),
-                  ),
-                ],
-              ]),
-              const SizedBox(height: 8),
-              _memberDropdown(),
-              const SizedBox(height: 16),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: Checkbox(
-                    value: _isNotApplicable,
-                    onChanged: (v) => setState(() {
-                      _isNotApplicable = v ?? false;
-                      if (_isNotApplicable) _selectedMember = null;
-                    }),
-                    activeColor: AppColors.primaryGreen,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4)),
-                    side: const BorderSide(color: Color(0xFFD1D5DB)),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                const Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                      Text('Not Applicable',
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: Color(0xFF374151))),
-                      SizedBox(height: 2),
-                      Text(
-                          'Check this if this process is not applicable for this project.',
-                          style: TextStyle(
-                              fontSize: 11, color: Color(0xFF9CA3AF))),
-                    ])),
-              ]),
-              const SizedBox(height: 16),
-              if (widget.teamName != null && widget.teamName!.isNotEmpty) ...[
-                Row(children: [
-                  const Text('Working team: ',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                  _teamPill(),
-                ]),
-                const SizedBox(height: 16),
-              ],
+  Widget build(BuildContext context) => Container(
+    decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        decoration: const BoxDecoration(gradient: LinearGradient(colors: [Color(0xFF667EEA), Color(0xFF764BA2)], begin: Alignment.centerLeft, end: Alignment.centerRight), borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+        child: Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Assign Process', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(widget.process.processName, style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+          ])),
+          GestureDetector(onTap: () => Navigator.pop(context), child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.close, color: Colors.white, size: 18))),
+        ]),
+      ),
+      Flexible(child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Deadline Date', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+        const SizedBox(height: 6),
+        GestureDetector(
+          onTap: _isNotApplicable ? null : _pickDeadline,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+            decoration: BoxDecoration(border: Border.all(color: const Color(0xFFD1D5DB)), borderRadius: BorderRadius.circular(8), color: _isNotApplicable ? const Color(0xFFF9FAFB) : Colors.white),
+            child: Row(children: [
+              Expanded(child: Text(_deadlineCtrl.text.isEmpty ? 'dd/mm/yyyy' : _deadlineCtrl.text, style: TextStyle(fontSize: 14, color: _deadlineCtrl.text.isEmpty ? const Color(0xFF9CA3AF) : const Color(0xFF1E293B)))),
+              Icon(Icons.calendar_today_outlined, size: 18, color: _isNotApplicable ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280)),
             ]),
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: Row(children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _isSaving ? null : () => Navigator.pop(context),
-                style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF374151),
-                    side: const BorderSide(color: Color(0xFFD1D5DB)),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8))),
-                child: const Text('Cancel',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton(
-                onPressed: _isSaving ? null : _submit,
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8))),
-                child: _isSaving
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : const Text('Assign',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600)),
-              ),
-            ),
-          ]),
-        ),
-      ]),
-    );
-  }
+        const SizedBox(height: 16),
+        const Text('Assign To', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+        const SizedBox(height: 8),
+        if (_loadingMembers)
+          Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: const Color(0xFFD1FAE5), border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(8)), child: const Row(children: [SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)), SizedBox(width: 12), Text('Loading team members…', style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)))]))
+        else if (_members.isEmpty)
+          Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: const Color(0xFFF9FAFB), border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(8)), child: const Text('No assignable team members found', style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))))
+        else
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(border: Border.all(color: _isNotApplicable ? const Color(0xFFD1D5DB) : AppColors.primaryGreen, width: 1.5), borderRadius: BorderRadius.circular(8), color: _isNotApplicable ? const Color(0xFFF9FAFB) : Colors.white),
+            child: DropdownButtonHideUnderline(child: DropdownButton<TeamMemberModel>(
+              isExpanded: true,
+              value: _selectedMember,
+              hint: Text('Select a team member', style: TextStyle(fontSize: 14, color: _isNotApplicable ? const Color(0xFFD1D5DB) : const Color(0xFF374151))),
+              icon: Icon(Icons.keyboard_arrow_down_rounded, color: _isNotApplicable ? const Color(0xFFD1D5DB) : AppColors.primaryGreen),
+              items: _isNotApplicable ? null : _members.map((m) => DropdownMenuItem<TeamMemberModel>(value: m, child: Text(m.name, style: const TextStyle(fontSize: 14, color: Color(0xFF1E293B))))).toList(),
+              onChanged: _isNotApplicable ? null : (v) => setState(() => _selectedMember = v),
+            )),
+          ),
+        const SizedBox(height: 16),
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(width: 20, height: 20, child: Checkbox(value: _isNotApplicable, onChanged: (v) => setState(() { _isNotApplicable = v ?? false; if (_isNotApplicable) _selectedMember = null; }), activeColor: AppColors.primaryGreen, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)), side: const BorderSide(color: Color(0xFFD1D5DB)))),
+          const SizedBox(width: 10),
+          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Not Applicable', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
+            SizedBox(height: 2),
+            Text('Check this if this process is not applicable for this project.', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          ])),
+        ]),
+        const SizedBox(height: 16),
+      ]))),
+      Padding(padding: const EdgeInsets.fromLTRB(20, 12, 20, 20), child: Row(children: [
+        Expanded(child: OutlinedButton(onPressed: _isSaving ? null : () => Navigator.pop(context), style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF374151), side: const BorderSide(color: Color(0xFFD1D5DB)), padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: const Text('Cancel', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)))),
+        const SizedBox(width: 12),
+        Expanded(child: ElevatedButton(onPressed: _isSaving ? null : _submit, style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryGreen, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 13), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: _isSaving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Assign', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)))),
+      ])),
+    ]),
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// _UploadDialog
+// _UploadDialog (unchanged)
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _UploadDialog extends StatefulWidget {
@@ -5444,12 +3880,7 @@ class _UploadDialog extends StatefulWidget {
   final int currentUserId;
   final Future<void> Function() onUploaded;
 
-  const _UploadDialog({
-    required this.process,
-    required this.projectId,
-    required this.currentUserId,
-    required this.onUploaded,
-  });
+  const _UploadDialog({required this.process, required this.projectId, required this.currentUserId, required this.onUploaded});
 
   @override
   State<_UploadDialog> createState() => _UploadDialogState();
@@ -5464,23 +3895,10 @@ class _UploadDialogState extends State<_UploadDialog> {
   bool _isPickingFile = false;
 
   @override
-  void dispose() {
-    _driveLinkCtrl.dispose();
-    super.dispose();
-  }
+  void dispose() { _driveLinkCtrl.dispose(); super.dispose(); }
 
   Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _uploadedDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-            colorScheme: ColorScheme.light(primary: AppColors.primaryGreen)),
-        child: child!,
-      ),
-    );
+    final picked = await showDatePicker(context: context, initialDate: _uploadedDate, firstDate: DateTime(2020), lastDate: DateTime.now().add(const Duration(days: 1)), builder: (ctx, child) => Theme(data: Theme.of(ctx).copyWith(colorScheme: ColorScheme.light(primary: AppColors.primaryGreen)), child: child!));
     if (picked != null && mounted) setState(() => _uploadedDate = picked);
   }
 
@@ -5488,94 +3906,43 @@ class _UploadDialogState extends State<_UploadDialog> {
     if (_isPickingFile) return;
     setState(() => _isPickingFile = true);
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: [
-          'pdf',
-          'doc',
-          'docx',
-          'jpg',
-          'jpeg',
-          'png',
-          'xls',
-          'xlsx'
-        ],
-        withData: false,
-      );
+      final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'xls', 'xlsx'], withData: false);
       if (!mounted) return;
-      if (result != null && result.files.isNotEmpty) {
-        setState(() => _pickedFile = result.files.first);
-      }
+      if (result != null && result.files.isNotEmpty) setState(() => _pickedFile = result.files.first);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Could not open file picker: $e'),
-          backgroundColor: const Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open file picker: $e'), backgroundColor: const Color(0xFFEF4444)));
     } finally {
       if (mounted) setState(() => _isPickingFile = false);
     }
   }
 
-  String get _formattedDate =>
-      '${_uploadedDate.day.toString().padLeft(2, '0')}/${_uploadedDate.month.toString().padLeft(2, '0')}/${_uploadedDate.year}';
+  String get _formattedDate => '${_uploadedDate.day.toString().padLeft(2, '0')}/${_uploadedDate.month.toString().padLeft(2, '0')}/${_uploadedDate.year}';
+  String get _isoDate => '${_uploadedDate.year}-${_uploadedDate.month.toString().padLeft(2, '0')}-${_uploadedDate.day.toString().padLeft(2, '0')}';
 
-  String get _isoDate =>
-      '${_uploadedDate.year}-${_uploadedDate.month.toString().padLeft(2, '0')}-${_uploadedDate.day.toString().padLeft(2, '0')}';
-
-  // ── Submit ──────────────────────────────────────────────────────────────
   Future<void> _submit() async {
     if (_isSaving) return;
-
     if (_uploadType == 'drive_link' && _driveLinkCtrl.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Please enter a Google Drive link'),
-          backgroundColor: Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a Google Drive link'), backgroundColor: Color(0xFFEF4444)));
       return;
     }
     if (_uploadType == 'file' && _pickedFile == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Please select a file to upload'),
-          backgroundColor: Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a file to upload'), backgroundColor: Color(0xFFEF4444)));
       return;
     }
-
     setState(() => _isSaving = true);
-
     try {
       final token = await AuthStorageService.getToken();
       if (token == null || token.isEmpty) throw Exception('Session expired.');
-
-      // ── Mobile upload endpoint (/api/mobile/process-tasks/upload) ─────
-      final uploadUrl =
-          '${ApiConstants.baseUrl}/api/mobile/process-tasks/upload';
-
+      final uploadUrl = '${ApiConstants.baseUrl}/api/mobile/process-tasks/upload';
       http.Response response;
-
       if (_uploadType == 'drive_link') {
-        response = await http
-            .post(
-              Uri.parse(uploadUrl),
-              headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer $token',
-              },
-              body: jsonEncode({
-                'project_id': widget.projectId,
-                'process_id': widget.process.processId,
-                'upload_type': 'drive_link',
-                'uploaded_date': _isoDate,
-                'drive_link': _driveLinkCtrl.text.trim(),
-              }),
-            )
-            .timeout(const Duration(seconds: 30));
+        response = await http.post(Uri.parse(uploadUrl), headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: jsonEncode({'project_id': widget.projectId, 'process_id': widget.process.processId, 'upload_type': 'drive_link', 'uploaded_date': _isoDate, 'drive_link': _driveLinkCtrl.text.trim()})).timeout(const Duration(seconds: 30));
       } else {
         final filePath = _pickedFile!.path;
         if (filePath == null) throw Exception('File path is null');
-
         final mimeType = lookupMimeType(filePath) ?? 'application/octet-stream';
         final mimeParts = mimeType.split('/');
-
         final request = http.MultipartRequest('POST', Uri.parse(uploadUrl))
           ..headers['Authorization'] = 'Bearer $token'
           ..headers['Accept'] = 'application/json'
@@ -5583,429 +3950,102 @@ class _UploadDialogState extends State<_UploadDialog> {
           ..fields['process_id'] = widget.process.processId.toString()
           ..fields['upload_type'] = 'file'
           ..fields['uploaded_date'] = _isoDate
-          ..files.add(await http.MultipartFile.fromPath(
-            'file',
-            filePath,
-            contentType: MediaType(mimeParts[0], mimeParts[1]),
-          ));
-
-        final streamed =
-            await request.send().timeout(const Duration(seconds: 60));
+          ..files.add(await http.MultipartFile.fromPath('file', filePath, contentType: MediaType(mimeParts[0], mimeParts[1])));
+        final streamed = await request.send().timeout(const Duration(seconds: 60));
         response = await http.Response.fromStream(streamed);
       }
-
       if (!mounted) return;
       await _handleResponse(response);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: const Color(0xFFEF4444)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFEF4444)));
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
   }
 
   Future<void> _handleResponse(http.Response response) async {
-    dynamic decoded;
-    try {
-      decoded = jsonDecode(response.body);
-    } catch (_) {
-      decoded = {};
-    }
-
-    final success = (response.statusCode >= 200 && response.statusCode < 300) &&
-        (decoded is Map
-            ? (decoded['status'] == true || decoded['success'] == true)
-            : true);
-
+    dynamic decoded; try { decoded = jsonDecode(response.body); } catch (_) { decoded = {}; }
+    final success = (response.statusCode >= 200 && response.statusCode < 300) && (decoded is Map ? (decoded['status'] == true || decoded['success'] == true) : true);
     if (success) {
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(_uploadType == 'drive_link'
-            ? 'Drive link saved. The team leader has been notified.'
-            : 'File uploaded. The team leader has been notified.'),
-        backgroundColor: AppColors.primaryGreen,
-        duration: const Duration(seconds: 4),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_uploadType == 'drive_link' ? 'Drive link saved. The team leader has been notified.' : 'File uploaded. The team leader has been notified.'), backgroundColor: AppColors.primaryGreen, duration: const Duration(seconds: 4)));
       await widget.onUploaded();
     } else {
-      final msg = (decoded is Map ? decoded['message']?.toString() : null) ??
-          'Upload failed (${response.statusCode})';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
+      final msg = (decoded is Map ? decoded['message']?.toString() : null) ?? 'Upload failed (${response.statusCode})';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
     }
   }
 
-  // ── Helpers ─────────────────────────────────────────────────────────────
-  IconData _fileIcon(String? ext) {
-    switch (ext?.toLowerCase()) {
-      case 'pdf':
-        return Icons.picture_as_pdf_outlined;
-      case 'doc':
-      case 'docx':
-        return Icons.description_outlined;
-      case 'xls':
-      case 'xlsx':
-        return Icons.table_chart_outlined;
-      case 'jpg':
-      case 'jpeg':
-      case 'png':
-        return Icons.image_outlined;
-      default:
-        return Icons.insert_drive_file_outlined;
-    }
-  }
-
-  String _formatFileSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-
-  Widget _typeChip({
-    required String label,
-    required IconData icon,
-    required String value,
-  }) {
-    final selected = _uploadType == value;
-    return GestureDetector(
-      onTap: () => setState(() {
-        _uploadType = value;
-        if (value == 'drive_link') _pickedFile = null;
-      }),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.primaryGreen : const Color(0xFFF1F5F9),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-              color:
-                  selected ? AppColors.primaryGreen : const Color(0xFFE2E8F0)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon,
-              size: 14,
-              color: selected ? Colors.white : const Color(0xFF64748B)),
-          const SizedBox(width: 6),
-          Text(label,
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: selected ? Colors.white : const Color(0xFF374151))),
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(width: double.infinity, padding: const EdgeInsets.fromLTRB(20, 20, 20, 16), decoration: const BoxDecoration(color: Color(0xFF1E293B), borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        child: Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(widget.process.hasFile ? 'Reupload Document' : 'Upload Document', style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(widget.process.processName, style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+          ])),
+          GestureDetector(onTap: () => Navigator.pop(context), child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.close, color: Colors.white, size: 18))),
         ]),
       ),
-    );
-  }
+      Flexible(child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Upload Type', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+        const SizedBox(height: 8),
+        Row(children: [
+          _typeChip(label: 'Drive Link', icon: Icons.link_rounded, value: 'drive_link'),
+          const SizedBox(width: 10),
+          _typeChip(label: 'Upload File', icon: Icons.upload_file_outlined, value: 'file'),
+        ]),
+        const SizedBox(height: 16),
+        if (_uploadType == 'drive_link') ...[
+          const Text('Google Drive Link', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+          const SizedBox(height: 6),
+          TextField(controller: _driveLinkCtrl, keyboardType: TextInputType.url, decoration: InputDecoration(hintText: 'https://drive.google.com/file/d/...', hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)), border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFD1D5DB))), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFD1D5DB))), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: AppColors.primaryGreen, width: 1.5)), contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12), prefixIcon: const Icon(Icons.link_rounded, size: 18, color: Color(0xFF94A3B8))), style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B))),
+        ] else ...[
+          const Text('Select File', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+          const SizedBox(height: 6),
+          GestureDetector(onTap: _isPickingFile ? null : _pickFile, child: Container(width: double.infinity, padding: const EdgeInsets.all(20), decoration: BoxDecoration(border: Border.all(color: _pickedFile != null ? AppColors.primaryGreen : AppColors.primaryGreen.withValues(alpha: 0.4)), borderRadius: BorderRadius.circular(8), color: AppColors.primaryGreen.withValues(alpha: 0.04)),
+            child: _isPickingFile ? Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryGreen))) : _pickedFile != null
+              ? Row(children: [Icon(Icons.insert_drive_file_outlined, color: AppColors.primaryGreen, size: 20), const SizedBox(width: 12), Expanded(child: Text(_pickedFile!.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1E293B)), overflow: TextOverflow.ellipsis)), GestureDetector(onTap: () => setState(() => _pickedFile = null), child: const Icon(Icons.close, size: 18, color: Color(0xFF94A3B8)))])
+              : Column(children: [Icon(Icons.cloud_upload_outlined, size: 36, color: AppColors.primaryGreen), const SizedBox(height: 8), Text('Tap to select file', style: TextStyle(color: AppColors.primaryGreen, fontWeight: FontWeight.w600, fontSize: 13)), const SizedBox(height: 4), const Text('PDF, DOC, DOCX, XLS, XLSX, JPG, PNG', style: TextStyle(color: Color(0xFF94A3AF), fontSize: 11))]),
+          )),
+        ],
+        const SizedBox(height: 16),
+        const Text('Upload Date', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+        const SizedBox(height: 6),
+        GestureDetector(onTap: _pickDate, child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13), decoration: BoxDecoration(border: Border.all(color: const Color(0xFFD1D5DB)), borderRadius: BorderRadius.circular(8), color: Colors.white), child: Row(children: [Expanded(child: Text(_formattedDate, style: const TextStyle(fontSize: 14, color: Color(0xFF1E293B)))), const Icon(Icons.calendar_today_outlined, size: 18, color: Color(0xFF6B7280))]))),
+        const SizedBox(height: 20),
+      ]))),
+      Padding(padding: const EdgeInsets.fromLTRB(20, 4, 20, 20), child: Row(children: [
+        Expanded(child: OutlinedButton(onPressed: _isSaving ? null : () => Navigator.pop(context), style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF374151), side: const BorderSide(color: Color(0xFFD1D5DB)), padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: const Text('Cancel', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)))),
+        const SizedBox(width: 12),
+        Expanded(child: ElevatedButton.icon(onPressed: _isSaving ? null : _submit, icon: _isSaving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.upload_rounded, size: 16), label: Text(_isSaving ? 'Uploading…' : 'Submit', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)), style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryGreen, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 13), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))))),
+      ])),
+    ]),
+  );
 
-  // ── Build ────────────────────────────────────────────────────────────────
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // ── Header ────────────────────────────────────────────────────────
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-          decoration: const BoxDecoration(
-              color: Color(0xFF1E293B),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-          child: Row(children: [
-            Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  Text(
-                      widget.process.hasFile
-                          ? 'Reupload Document'
-                          : 'Upload Document',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  Text(widget.process.processName,
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
-                          fontSize: 12),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                ])),
-            GestureDetector(
-              onTap: () => Navigator.pop(context),
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(6)),
-                child: const Icon(Icons.close, color: Colors.white, size: 18),
-              ),
-            ),
-          ]),
-        ),
-
-        // ── Body ──────────────────────────────────────────────────────────
-        Flexible(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // Info banner
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                    color: const Color(0xFFEFF6FF),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFBFDBFE))),
-                child: const Row(children: [
-                  Icon(Icons.info_outline, size: 15, color: Color(0xFF2563EB)),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'After upload, your team leader will be notified automatically.',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF1D4ED8)),
-                    ),
-                  ),
-                ]),
-              ),
-              const SizedBox(height: 16),
-
-              // Upload type chips
-              const Text('Upload Type',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151))),
-              const SizedBox(height: 8),
-              Row(children: [
-                _typeChip(
-                    label: 'Drive Link',
-                    icon: Icons.link_rounded,
-                    value: 'drive_link'),
-                const SizedBox(width: 10),
-                _typeChip(
-                    label: 'Upload File',
-                    icon: Icons.upload_file_outlined,
-                    value: 'file'),
-              ]),
-              const SizedBox(height: 16),
-
-              // Drive link field
-              if (_uploadType == 'drive_link') ...[
-                const Text('Google Drive Link',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF374151))),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _driveLinkCtrl,
-                  keyboardType: TextInputType.url,
-                  decoration: InputDecoration(
-                    hintText: 'https://drive.google.com/file/d/...',
-                    hintStyle:
-                        const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-                    enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                            color: AppColors.primaryGreen, width: 1.5)),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 12),
-                    prefixIcon: const Icon(Icons.link_rounded,
-                        size: 18, color: Color(0xFF94A3B8)),
-                  ),
-                  style:
-                      const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
-                ),
-              ] else ...[
-                // File picker
-                const Text('Select File',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF374151))),
-                const SizedBox(height: 6),
-                GestureDetector(
-                  onTap: _isPickingFile ? null : _pickFile,
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                          color: _pickedFile != null
-                              ? AppColors.primaryGreen
-                              : AppColors.primaryGreen.withValues(alpha: 0.4)),
-                      borderRadius: BorderRadius.circular(8),
-                      color: _pickedFile != null
-                          ? AppColors.primaryGreen.withValues(alpha: 0.06)
-                          : AppColors.primaryGreen.withValues(alpha: 0.04),
-                    ),
-                    child: _isPickingFile
-                        ? Center(
-                            child: SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: AppColors.primaryGreen)))
-                        : _pickedFile != null
-                            ? Row(children: [
-                                Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                      color: AppColors.primaryGreen
-                                          .withValues(alpha: 0.12),
-                                      borderRadius: BorderRadius.circular(6)),
-                                  child: Icon(_fileIcon(_pickedFile!.extension),
-                                      color: AppColors.primaryGreen, size: 20),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                    child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                      Text(_pickedFile!.name,
-                                          style: const TextStyle(
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w600,
-                                              color: Color(0xFF1E293B)),
-                                          overflow: TextOverflow.ellipsis),
-                                      const SizedBox(height: 2),
-                                      Text(_formatFileSize(_pickedFile!.size),
-                                          style: const TextStyle(
-                                              fontSize: 11,
-                                              color: Color(0xFF94A3B8))),
-                                    ])),
-                                GestureDetector(
-                                  onTap: () =>
-                                      setState(() => _pickedFile = null),
-                                  child: const Icon(Icons.close,
-                                      size: 18, color: Color(0xFF94A3B8)),
-                                ),
-                              ])
-                            : Column(children: [
-                                Icon(Icons.cloud_upload_outlined,
-                                    size: 36, color: AppColors.primaryGreen),
-                                const SizedBox(height: 8),
-                                Text('Tap to select file',
-                                    style: TextStyle(
-                                        color: AppColors.primaryGreen,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 13)),
-                                const SizedBox(height: 4),
-                                const Text(
-                                    'PDF, DOC, DOCX, XLS, XLSX, JPG, PNG',
-                                    style: TextStyle(
-                                        color: Color(0xFF94A3AF),
-                                        fontSize: 11)),
-                              ]),
-                  ),
-                ),
-              ],
-
-              const SizedBox(height: 16),
-
-              // Date picker
-              const Text('Upload Date',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151))),
-              const SizedBox(height: 6),
-              GestureDetector(
-                onTap: _pickDate,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-                  decoration: BoxDecoration(
-                      border: Border.all(color: const Color(0xFFD1D5DB)),
-                      borderRadius: BorderRadius.circular(8),
-                      color: Colors.white),
-                  child: Row(children: [
-                    Expanded(
-                        child: Text(_formattedDate,
-                            style: const TextStyle(
-                                fontSize: 14, color: Color(0xFF1E293B)))),
-                    const Icon(Icons.calendar_today_outlined,
-                        size: 18, color: Color(0xFF6B7280)),
-                  ]),
-                ),
-              ),
-              const SizedBox(height: 20),
-            ]),
-          ),
-        ),
-
-        // ── Footer buttons ────────────────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-          child: Row(children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _isSaving ? null : () => Navigator.pop(context),
-                style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF374151),
-                    side: const BorderSide(color: Color(0xFFD1D5DB)),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8))),
-                child: const Text('Cancel',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: _isSaving ? null : _submit,
-                icon: _isSaving
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.upload_rounded, size: 16),
-                label: Text(_isSaving ? 'Uploading…' : 'Submit',
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600)),
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8))),
-              ),
-            ),
-          ]),
-        ),
-      ]),
+  Widget _typeChip({required String label, required IconData icon, required String value}) {
+    final selected = _uploadType == value;
+    return GestureDetector(
+      onTap: () => setState(() { _uploadType = value; if (value == 'drive_link') _pickedFile = null; }),
+      child: Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9), decoration: BoxDecoration(color: selected ? AppColors.primaryGreen : const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(8), border: Border.all(color: selected ? AppColors.primaryGreen : const Color(0xFFE2E8F0))),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 14, color: selected ? Colors.white : const Color(0xFF64748B)), const SizedBox(width: 6), Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: selected ? Colors.white : const Color(0xFF374151)))])),
     );
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// _EmailDialog
+// _EmailDialog (unchanged)
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _EmailDialog extends StatefulWidget {
   final ProcessListItemModel process;
   final int projectId;
-
   const _EmailDialog({required this.process, required this.projectId});
-
   @override
   State<_EmailDialog> createState() => _EmailDialogState();
 }
@@ -6023,322 +4063,70 @@ class _EmailDialogState extends State<_EmailDialog> {
   ];
 
   @override
-  void dispose() {
-    _noteCtrl.dispose();
-    super.dispose();
-  }
+  void dispose() { _noteCtrl.dispose(); super.dispose(); }
 
   Future<void> _send() async {
     if (_isSending) return;
-
-    if (_selectedRecipients.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Please select at least one recipient'),
-        backgroundColor: Color(0xFFEF4444),
-      ));
-      return;
-    }
-
-    if (widget.process.filePath == null || widget.process.filePath!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('No file uploaded for this process yet'),
-        backgroundColor: Color(0xFFEF4444),
-      ));
-      return;
-    }
-
+    if (_selectedRecipients.isEmpty) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select at least one recipient'), backgroundColor: Color(0xFFEF4444))); return; }
+    if (widget.process.filePath == null || widget.process.filePath!.isEmpty) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No file uploaded for this process yet'), backgroundColor: Color(0xFFEF4444))); return; }
     setState(() => _isSending = true);
-
     try {
       final token = await AuthStorageService.getToken();
       if (token == null || token.isEmpty) throw Exception('Session expired.');
-
       final url = Uri.parse('${ApiConstants.baseUrl}/send-email');
-
-      final response = await http
-          .post(
-            url,
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-            body: jsonEncode({
-              'project_id': widget.projectId,
-              'process_id': widget.process.processId,
-              'file_path': widget.process.filePath,
-              'recipients': _selectedRecipients.toList(),
-              'note': _noteCtrl.text.trim(),
-            }),
-          )
-          .timeout(const Duration(seconds: 30));
-
+      final response = await http.post(url, headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'Authorization': 'Bearer $token'}, body: jsonEncode({'project_id': widget.projectId, 'process_id': widget.process.processId, 'file_path': widget.process.filePath, 'recipients': _selectedRecipients.toList(), 'note': _noteCtrl.text.trim()})).timeout(const Duration(seconds: 30));
       if (!mounted) return;
-
-      dynamic decoded;
-      try {
-        decoded = jsonDecode(response.body);
-      } catch (_) {
-        decoded = {'message': response.body};
-      }
-
+      dynamic decoded; try { decoded = jsonDecode(response.body); } catch (_) { decoded = {'message': response.body}; }
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final success = decoded is Map ? (decoded['success'] == true) : true;
-
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-            (decoded is Map ? decoded['text']?.toString() : null) ??
-                (success ? 'Email sent successfully' : 'Email failed'),
-          ),
-          backgroundColor:
-              success ? AppColors.primaryGreen : const Color(0xFFEF4444),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text((decoded is Map ? decoded['text']?.toString() : null) ?? (success ? 'Email sent successfully' : 'Email failed')), backgroundColor: success ? AppColors.primaryGreen : const Color(0xFFEF4444)));
       } else {
-        final msg = (decoded is Map ? decoded['text']?.toString() : null) ??
-            (decoded is Map ? decoded['message']?.toString() : null) ??
-            'Failed to send email (${response.statusCode})';
-
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(msg),
-          backgroundColor: const Color(0xFFEF4444),
-        ));
+        final msg = (decoded is Map ? decoded['text']?.toString() : null) ?? (decoded is Map ? decoded['message']?.toString() : null) ?? 'Failed to send email (${response.statusCode})';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: const Color(0xFFEF4444)));
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Error: $e'),
-        backgroundColor: const Color(0xFFEF4444),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFEF4444)));
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-          decoration: const BoxDecoration(
-              color: Color(0xFF1E293B),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-          child: Row(children: [
-            Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  const Text('Send Mail',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  Text(widget.process.processName,
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
-                          fontSize: 12),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                ])),
-            GestureDetector(
-              onTap: () => Navigator.pop(context),
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(6)),
-                child: const Icon(Icons.close, color: Colors.white, size: 18),
-              ),
-            ),
-          ]),
-        ),
-        Flexible(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              if (widget.process.filePath != null &&
-                  widget.process.filePath!.isNotEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFF0FDF4),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFBBF7D0))),
-                  child: Row(children: [
-                    const Icon(Icons.insert_drive_file_outlined,
-                        size: 16, color: Color(0xFF22C55E)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: Text(widget.process.filePath!,
-                            style: const TextStyle(
-                                fontSize: 11, color: Color(0xFF166534)),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis)),
-                  ]),
-                ),
-                const SizedBox(height: 16),
-              ] else ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFFFF7ED),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFFED7AA))),
-                  child: const Row(children: [
-                    Icon(Icons.warning_amber_rounded,
-                        size: 16, color: Color(0xFFF97316)),
-                    SizedBox(width: 8),
-                    Expanded(
-                        child: Text('No file uploaded yet.',
-                            style: TextStyle(
-                                fontSize: 11, color: Color(0xFF9A3412)))),
-                  ]),
-                ),
-                const SizedBox(height: 16),
-              ],
-              const Text('Recipients',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151))),
-              const SizedBox(height: 4),
-              const Text('Select who should receive this email',
-                  style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _recipientOptions.map((opt) {
-                  final val = opt['value']!;
-                  final selected = _selectedRecipients.contains(val);
-                  return GestureDetector(
-                    onTap: () => setState(() {
-                      if (selected) {
-                        _selectedRecipients.remove(val);
-                      } else {
-                        _selectedRecipients.add(val);
-                      }
-                    }),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? const Color(0xFF1E293B)
-                            : const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: selected
-                                ? const Color(0xFF1E293B)
-                                : const Color(0xFFE2E8F0)),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(
-                            selected
-                                ? Icons.check_circle_rounded
-                                : Icons.radio_button_unchecked,
-                            size: 14,
-                            color: selected
-                                ? Colors.white
-                                : const Color(0xFF94A3B8)),
-                        const SizedBox(width: 6),
-                        Text(opt['label']!,
-                            style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                                color: selected
-                                    ? Colors.white
-                                    : const Color(0xFF374151))),
-                      ]),
-                    ),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 16),
-              const Text('Note (optional)',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151))),
-              const SizedBox(height: 6),
-              TextField(
-                controller: _noteCtrl,
-                maxLines: 3,
-                decoration: InputDecoration(
-                  hintText: 'Add an optional note…',
-                  hintStyle:
-                      const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(
-                          color: Color(0xFF1E293B), width: 1.5)),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                ),
-                style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
-              ),
-              const SizedBox(height: 20),
-            ]),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-          child: Row(children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _isSending ? null : () => Navigator.pop(context),
-                style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF374151),
-                    side: const BorderSide(color: Color(0xFFD1D5DB)),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8))),
-                child: const Text('Cancel',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: _isSending ? null : _send,
-                icon: _isSending
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.send_rounded, size: 16),
-                label: Text(_isSending ? 'Sending…' : 'Send',
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600)),
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1E293B),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8))),
-              ),
-            ),
-          ]),
-        ),
-      ]),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+    decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(width: double.infinity, padding: const EdgeInsets.fromLTRB(20, 20, 20, 16), decoration: const BoxDecoration(color: Color(0xFF1E293B), borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        child: Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('Send Mail', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)), const SizedBox(height: 2), Text(widget.process.processName, style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)])),
+          GestureDetector(onTap: () => Navigator.pop(context), child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)), child: const Icon(Icons.close, color: Colors.white, size: 18))),
+        ]),
+      ),
+      Flexible(child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Recipients', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+        const SizedBox(height: 10),
+        Wrap(spacing: 8, runSpacing: 8, children: _recipientOptions.map((opt) {
+          final val = opt['value']!;
+          final selected = _selectedRecipients.contains(val);
+          return GestureDetector(
+            onTap: () => setState(() { if (selected) _selectedRecipients.remove(val); else _selectedRecipients.add(val); }),
+            child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), decoration: BoxDecoration(color: selected ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(8), border: Border.all(color: selected ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0))),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(selected ? Icons.check_circle_rounded : Icons.radio_button_unchecked, size: 14, color: selected ? Colors.white : const Color(0xFF94A3B8)), const SizedBox(width: 6), Text(opt['label']!, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: selected ? Colors.white : const Color(0xFF374151)))])),
+          );
+        }).toList()),
+        const SizedBox(height: 16),
+        const Text('Note (optional)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+        const SizedBox(height: 6),
+        TextField(controller: _noteCtrl, maxLines: 3, decoration: InputDecoration(hintText: 'Add an optional note…', hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFCBD5E1)), border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE2E8F0))), enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE2E8F0))), focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1E293B), width: 1.5)), contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)), style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B))),
+        const SizedBox(height: 20),
+      ]))),
+      Padding(padding: const EdgeInsets.fromLTRB(20, 4, 20, 20), child: Row(children: [
+        Expanded(child: OutlinedButton(onPressed: _isSending ? null : () => Navigator.pop(context), style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF374151), side: const BorderSide(color: Color(0xFFD1D5DB)), padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), child: const Text('Cancel', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)))),
+        const SizedBox(width: 12),
+        Expanded(child: ElevatedButton.icon(onPressed: _isSending ? null : _send, icon: _isSending ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.send_rounded, size: 16), label: Text(_isSending ? 'Sending…' : 'Send', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)), style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E293B), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 13), elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))))),
+      ])),
+    ]),
+  );
 }

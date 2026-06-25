@@ -33,6 +33,16 @@ class _LoginPageState extends State<LoginPage>
   late Animation<double> _fadeIn;
   late Animation<Offset> _slideUp;
 
+  // ── Allowed roles ─────────────────────────────────────────────────────────
+  static const _allowedRoles = {
+    'admin',
+    'teamleader',
+    'manager',
+    'executive',
+    'employee',
+    'receptionist', // ← ADD any additional roles here
+  };
+
   @override
   void initState() {
     super.initState();
@@ -92,8 +102,19 @@ class _LoginPageState extends State<LoginPage>
       if (!mounted) return;
 
       final user = result['user'] as Map<String, dynamic>? ?? {};
-      final role = (user['role']?.toString() ?? '').toLowerCase();
+      final role = (user['role']?.toString() ?? '').toLowerCase().trim();
 
+      // ── Role check BEFORE showing success snackbar ────────────────────
+      if (!_allowedRoles.contains(role)) {
+        setState(() {
+          _errorMessage =
+              'Access denied. Your role "$role" is not permitted in this app.';
+          isLoading = false;
+        });
+        return;
+      }
+
+      // ── Success ───────────────────────────────────────────────────────
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: AppColors.primaryGreen,
@@ -104,22 +125,10 @@ class _LoginPageState extends State<LoginPage>
         ),
       );
 
-      // Role-wise navigation
-      if (role == 'admin' ||
-          role == 'teamleader' ||
-          role == 'manager' ||
-          role == 'executive' ||
-          role == 'employee') {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const DashboardPage()),
-        );
-      } else {
-        setState(() {
-          _errorMessage = 'Role "$role" is not allowed in this mobile app.';
-          isLoading = false;
-        });
-      }
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const DashboardPage()),
+      );
     } catch (e) {
       if (!mounted) return;
 
