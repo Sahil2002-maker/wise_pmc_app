@@ -1,8 +1,6 @@
 // lib/features/stage21/presentation/pages/material_weight_measurement_list_page.dart
 //
-// UPDATED: Added "Audit Trail – Removed Entries" section below the main list.
-// The audit section is implemented as a self-contained widget
-// (MwmAuditTrailSection) with its own controller and search/pagination.
+// Updated: shows total_received_bags for cement-type records in the card header.
 
 import 'package:flutter/material.dart';
 import '../controllers/material_weight_measurement_controller.dart';
@@ -33,10 +31,7 @@ class _MaterialWeightMeasurementListPageState
   late MaterialWeightMeasurementController _ctrl;
   final TextEditingController _searchCtrl = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
-
-  static const Color _accent =
-      Color(0xFF059669); // teal-green — distinct from DPR/Stock/Quote
-
+  static const Color _accent = Color(0xFF059669);
   int? _downloadingId;
 
   @override
@@ -57,8 +52,6 @@ class _MaterialWeightMeasurementListPageState
     super.dispose();
   }
 
-  // ── Navigation ──────────────────────────────────────────────────────────────
-
   Future<void> _openCreate() async {
     await _ctrl.initCreateForm();
     if (!mounted) return;
@@ -66,8 +59,7 @@ class _MaterialWeightMeasurementListPageState
       context,
       MaterialPageRoute(
         builder: (_) => MaterialWeightMeasurementFormPage(
-          controller: _ctrl,
-          isEdit: false,
+          controller: _ctrl, isEdit: false,
         ),
       ),
     );
@@ -80,9 +72,7 @@ class _MaterialWeightMeasurementListPageState
       context,
       MaterialPageRoute(
         builder: (_) => MaterialWeightMeasurementFormPage(
-          controller: _ctrl,
-          isEdit: true,
-          recordId: record.id,
+          controller: _ctrl, isEdit: true, recordId: record.id,
         ),
       ),
     );
@@ -90,59 +80,44 @@ class _MaterialWeightMeasurementListPageState
 
   Future<void> _openView(MwmListModel record) async {
     try {
-      final detail =
-          await MwmApiService.fetchDetail(widget.projectId, record.id);
+      final detail = await MwmApiService.fetchDetail(widget.projectId, record.id);
       if (!mounted) return;
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) =>
-              MaterialWeightMeasurementViewPage(detail: detail),
+          builder: (_) => MaterialWeightMeasurementViewPage(detail: detail),
         ),
       );
     } catch (e) {
-      _showSnack(
-        e.toString().replaceAll('Exception: ', ''),
-        color: const Color(0xFFEF4444),
-      );
+      _showSnack(e.toString().replaceAll('Exception: ', ''),
+          color: const Color(0xFFEF4444));
     }
   }
-
-  // ── PDF download (authenticated) ────────────────────────────────────────────
 
   Future<void> _downloadPdf(MwmListModel record) async {
     if (_downloadingId != null) return;
     setState(() => _downloadingId = record.id);
-
     final url = MwmApiService.downloadUrl(widget.projectId, record.id);
     final result = await PdfDownloadService.downloadAndOpen(
       url: url,
       fileName: 'MWM-${record.mwmNo.replaceAll('/', '-')}.pdf',
     );
-
     if (!mounted) return;
     setState(() => _downloadingId = null);
-
     if (!result.ok) {
-      _showSnack(
-        result.errorMessage ?? 'Failed to download PDF.',
-        color: const Color(0xFFEF4444),
-      );
+      _showSnack(result.errorMessage ?? 'Failed to download PDF.',
+          color: const Color(0xFFEF4444));
     }
   }
-
-  // ── Delete ──────────────────────────────────────────────────────────────────
 
   Future<void> _confirmDelete(MwmListModel record) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Delete Record',
             style: TextStyle(fontWeight: FontWeight.w700)),
-        content: Text(
-            'Delete MWM "${record.mwmNo}"? This will soft-delete the record.'),
+        content: Text('Delete MWM "${record.mwmNo}"?'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -150,9 +125,8 @@ class _MaterialWeightMeasurementListPageState
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFEF4444),
-              foregroundColor: Colors.white,
-            ),
+                backgroundColor: const Color(0xFFEF4444),
+                foregroundColor: Colors.white),
             child: const Text('Delete'),
           ),
         ],
@@ -163,9 +137,8 @@ class _MaterialWeightMeasurementListPageState
       if (mounted) {
         _showSnack(
           success ? 'Record deleted.' : 'Failed to delete record.',
-          color: success
-              ? const Color(0xFF16A34A)
-              : const Color(0xFFEF4444),
+          color:
+              success ? const Color(0xFF16A34A) : const Color(0xFFEF4444),
         );
       }
     }
@@ -173,8 +146,8 @@ class _MaterialWeightMeasurementListPageState
 
   void _showSnack(String msg, {required Color color}) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content:
-          Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
+      content: Text(msg,
+          style: const TextStyle(fontWeight: FontWeight.w600)),
       backgroundColor: color,
       behavior: SnackBarBehavior.floating,
       shape:
@@ -182,8 +155,6 @@ class _MaterialWeightMeasurementListPageState
       margin: const EdgeInsets.all(16),
     ));
   }
-
-  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -194,8 +165,7 @@ class _MaterialWeightMeasurementListPageState
         builder: (_, __) {
           if (_ctrl.listLoading) {
             return const Center(
-                child:
-                    CircularProgressIndicator(color: _accent));
+                child: CircularProgressIndicator(color: _accent));
           }
           if (_ctrl.listError != null) return _buildError();
           return RefreshIndicator(
@@ -204,52 +174,38 @@ class _MaterialWeightMeasurementListPageState
             child: CustomScrollView(
               controller: _scrollCtrl,
               slivers: [
-                // ── Header + search (existing) ────────────────────────────
                 SliverToBoxAdapter(child: _buildHeader()),
                 SliverToBoxAdapter(child: _buildSearch()),
-
-                // ── Main records list (existing) ──────────────────────────
                 _ctrl.records.isEmpty
                     ? SliverFillRemaining(child: _buildMainEmpty())
                     : SliverList(
                         delegate: SliverChildBuilderDelegate(
-                          (_, i) =>
-                              _buildCard(_ctrl.records[i], i),
+                          (_, i) => _buildCard(_ctrl.records[i], i),
                           childCount: _ctrl.records.length,
                         ),
                       ),
-
-                // ── Divider before audit section ──────────────────────────
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                     child: Row(children: [
                       const Expanded(child: Divider()),
                       Padding(
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 10),
-                        child: Text(
-                          'AUDIT TRAIL',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.grey.shade500,
-                            letterSpacing: 1.0,
-                          ),
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: Text('AUDIT TRAIL',
+                            style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.grey.shade500,
+                                letterSpacing: 1.0)),
                       ),
                       const Expanded(child: Divider()),
                     ]),
                   ),
                 ),
                 const SliverToBoxAdapter(child: SizedBox(height: 10)),
-
-                // ── ✅ NEW: Audit Trail – Removed Entries ─────────────────
                 SliverToBoxAdapter(
-                  child: MwmAuditTrailSection(
-                      projectId: widget.projectId),
+                  child: MwmAuditTrailSection(projectId: widget.projectId),
                 ),
-
                 const SliverToBoxAdapter(child: SizedBox(height: 90)),
               ],
             ),
@@ -267,8 +223,6 @@ class _MaterialWeightMeasurementListPageState
     );
   }
 
-  // ── Header card (existing, unchanged) ─────────────────────────────────────
-
   Widget _buildHeader() => AnimatedBuilder(
         animation: _ctrl,
         builder: (_, __) => Container(
@@ -277,8 +231,7 @@ class _MaterialWeightMeasurementListPageState
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
-            border:
-                Border.all(color: _accent.withValues(alpha: 0.2)),
+            border: Border.all(color: _accent.withValues(alpha: 0.2)),
             boxShadow: [
               BoxShadow(
                   color: Colors.black.withValues(alpha: 0.04),
@@ -299,25 +252,20 @@ class _MaterialWeightMeasurementListPageState
             const SizedBox(width: 14),
             Expanded(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Material Weight Measurement',
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: _accent),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    widget.projectName,
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF64748B)),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Material Weight Measurement',
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: _accent)),
+                    const SizedBox(height: 2),
+                    Text(widget.projectName,
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF64748B)),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                  ]),
             ),
             Container(
               padding: const EdgeInsets.symmetric(
@@ -325,19 +273,15 @@ class _MaterialWeightMeasurementListPageState
               decoration: BoxDecoration(
                   color: _accent,
                   borderRadius: BorderRadius.circular(20)),
-              child: Text(
-                '${_ctrl.total}',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13),
-              ),
+              child: Text('${_ctrl.total}',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13)),
             ),
           ]),
         ),
       );
-
-  // ── Search bar (existing, unchanged) ──────────────────────────────────────
 
   Widget _buildSearch() => Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -366,82 +310,70 @@ class _MaterialWeightMeasurementListPageState
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide:
-                  const BorderSide(color: _accent, width: 1.5),
+              borderSide: const BorderSide(color: _accent, width: 1.5),
             ),
           ),
           style: const TextStyle(fontSize: 13),
         ),
       );
 
-  // ── Error state ────────────────────────────────────────────────────────────
-
   Widget _buildError() => Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline_rounded,
-                  color: Color(0xFFEF4444), size: 48),
-              const SizedBox(height: 12),
-              Text(_ctrl.listError ?? 'Error',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Color(0xFF64748B))),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: () => _ctrl.loadRecords(refresh: true),
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Retry'),
-                style: ElevatedButton.styleFrom(
-                    backgroundColor: _accent,
-                    foregroundColor: Colors.white),
-              ),
-            ],
-          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.error_outline_rounded,
+                color: Color(0xFFEF4444), size: 48),
+            const SizedBox(height: 12),
+            Text(_ctrl.listError ?? 'Error',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF64748B))),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: () => _ctrl.loadRecords(refresh: true),
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Retry'),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: _accent,
+                  foregroundColor: Colors.white),
+            ),
+          ]),
         ),
       );
-
-  // ── Empty state for main list ──────────────────────────────────────────────
 
   Widget _buildMainEmpty() => Center(
         child: Padding(
           padding: const EdgeInsets.all(40),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: _accent.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Icon(Icons.local_shipping_outlined,
-                    size: 56,
-                    color: _accent.withValues(alpha: 0.5)),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: _accent.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(20),
               ),
-              const SizedBox(height: 20),
-              const Text('No measurements yet.',
-                  style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF1E293B))),
-              const SizedBox(height: 8),
-              const Text(
-                "Tap 'New Measurement' to add the first one.",
+              child: Icon(Icons.local_shipping_outlined,
+                  size: 56, color: _accent.withValues(alpha: 0.5)),
+            ),
+            const SizedBox(height: 20),
+            const Text('No measurements yet.',
+                style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1E293B))),
+            const SizedBox(height: 8),
+            const Text("Tap 'New Measurement' to add the first one.",
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                    color: Color(0xFF94A3B8), fontSize: 13),
-              ),
-            ],
-          ),
+                    color: Color(0xFF94A3B8), fontSize: 13)),
+          ]),
         ),
       );
 
-  // ── Record card (existing, unchanged) ─────────────────────────────────────
-
   Widget _buildCard(MwmListModel record, int index) {
     final isDownloading = _downloadingId == record.id;
+    final hasBags = record.totalReceivedBags != null &&
+        record.totalReceivedBags != '0' &&
+        record.totalReceivedBags!.isNotEmpty;
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
       decoration: BoxDecoration(
@@ -456,7 +388,6 @@ class _MaterialWeightMeasurementListPageState
         ],
       ),
       child: Column(children: [
-        // ── Card header ────────────────────────────────────────────────────
         Container(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
           decoration: BoxDecoration(
@@ -472,33 +403,26 @@ class _MaterialWeightMeasurementListPageState
                   color: _accent,
                   borderRadius: BorderRadius.circular(8)),
               alignment: Alignment.center,
-              child: Text(
-                '${index + 1}',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700),
-              ),
+              child: Text('${index + 1}',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700)),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    record.mwmNo,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(record.mwmNo,
                     style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
-                        color: _accent),
-                  ),
-                  Text(
-                    record.measurementDate,
+                        color: _accent)),
+                Text(record.measurementDate,
                     style: const TextStyle(
-                        fontSize: 11, color: Color(0xFF64748B)),
-                  ),
-                ],
-              ),
+                        fontSize: 11, color: Color(0xFF64748B))),
+              ]),
             ),
             Container(
               padding: const EdgeInsets.symmetric(
@@ -507,138 +431,111 @@ class _MaterialWeightMeasurementListPageState
                 color: _accent.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: const Text(
-                'MWM',
-                style: TextStyle(
-                    fontSize: 10,
-                    color: _accent,
-                    fontWeight: FontWeight.w600),
-              ),
+              child: const Text('MWM',
+                  style: TextStyle(
+                      fontSize: 10,
+                      color: _accent,
+                      fontWeight: FontWeight.w600)),
             ),
           ]),
         ),
 
-        // ── Card body ─────────────────────────────────────────────────────
         Padding(
           padding: const EdgeInsets.all(14),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+            Row(children: [
+              _infoItem(Icons.format_list_numbered_outlined, 'Entries',
+                  '${record.entryCount}'),
+              const SizedBox(width: 12),
+              _infoItem(Icons.scale_outlined, 'Total Net Wt.',
+                  '${record.totalNetWeight} kg'),
+              const SizedBox(width: 12),
+              if (hasBags)
+                _infoItem(Icons.inventory_2_outlined, 'Received Bags',
+                    record.totalReceivedBags!)
+              else
+                _infoItem(Icons.person_outline, 'Created By',
+                    record.creatorName ?? 'N/A'),
+            ]),
+            if (!hasBags && record.remarks != null && record.remarks!.isNotEmpty) ...[
+              const SizedBox(height: 8),
               Row(children: [
-                _infoItem(
-                  Icons.format_list_numbered_outlined,
-                  'Entries',
-                  '${record.entryCount}',
-                ),
-                const SizedBox(width: 16),
-                _infoItem(
-                  Icons.scale_outlined,
-                  'Total Net Wt.',
-                  '${record.totalNetWeight} kg',
-                ),
-                const SizedBox(width: 16),
-                _infoItem(
-                  Icons.person_outline,
-                  'Created By',
-                  record.creatorName ?? 'N/A',
-                ),
-              ]),
-              if (record.remarks != null &&
-                  record.remarks!.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Row(children: [
-                  const Icon(Icons.notes_outlined,
-                      size: 12, color: Color(0xFF94A3B8)),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      record.remarks!,
+                const Icon(Icons.notes_outlined,
+                    size: 12, color: Color(0xFF94A3B8)),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(record.remarks!,
                       style: const TextStyle(
                           fontSize: 11, color: Color(0xFF64748B)),
                       maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ]),
-              ],
-              const SizedBox(height: 12),
-              const Divider(height: 1, color: Color(0xFFF1F5F9)),
-              const SizedBox(height: 10),
-
-              // ── Action buttons ─────────────────────────────────────────
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _ActionBtn(
+                      overflow: TextOverflow.ellipsis),
+                ),
+              ]),
+            ],
+            const SizedBox(height: 12),
+            const Divider(height: 1, color: Color(0xFFF1F5F9)),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _ActionBtn(
                     icon: Icons.visibility_outlined,
                     label: 'View',
                     color: const Color(0xFF0EA5E9),
-                    onTap: () => _openView(record),
-                  ),
-                  _ActionBtn(
+                    onTap: () => _openView(record)),
+                _ActionBtn(
                     icon: Icons.edit_outlined,
                     label: 'Edit',
                     color: const Color(0xFFF59E0B),
-                    onTap: () => _openEdit(record),
-                  ),
-                  _ActionBtn(
+                    onTap: () => _openEdit(record)),
+                _ActionBtn(
                     icon: Icons.picture_as_pdf_outlined,
-                    label:
-                        isDownloading ? 'Downloading…' : 'Print / PDF',
+                    label: isDownloading ? 'Downloading…' : 'Print / PDF',
                     color: const Color(0xFF22C55E),
-                    onTap: isDownloading
-                        ? null
-                        : () => _downloadPdf(record),
-                    isLoading: isDownloading,
-                  ),
-                  _ActionBtn(
+                    onTap: isDownloading ? null : () => _downloadPdf(record),
+                    isLoading: isDownloading),
+                _ActionBtn(
                     icon: Icons.delete_outline_rounded,
                     label: 'Delete',
                     color: const Color(0xFFEF4444),
-                    onTap: () => _confirmDelete(record),
-                  ),
-                ],
-              ),
-            ],
-          ),
+                    onTap: () => _confirmDelete(record)),
+              ],
+            ),
+          ]),
         ),
       ]),
     );
   }
 
-  Widget _infoItem(IconData icon, String label, String value) =>
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label,
+  Widget _infoItem(IconData icon, String label, String value) => Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 9,
+                  color: Color(0xFF94A3B8),
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.3)),
+          const SizedBox(height: 2),
+          Row(children: [
+            Icon(icon, size: 11, color: const Color(0xFF64748B)),
+            const SizedBox(width: 3),
+            Expanded(
+              child: Text(
+                value.isNotEmpty ? value : 'N/A',
                 style: const TextStyle(
-                    fontSize: 9,
-                    color: Color(0xFF94A3B8),
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.3)),
-            const SizedBox(height: 2),
-            Row(children: [
-              Icon(icon, size: 11, color: const Color(0xFF64748B)),
-              const SizedBox(width: 3),
-              Expanded(
-                child: Text(
-                  value.isNotEmpty ? value : 'N/A',
-                  style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF1E293B),
-                      fontWeight: FontWeight.w500),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                    fontSize: 11,
+                    color: Color(0xFF1E293B),
+                    fontWeight: FontWeight.w500),
+                overflow: TextOverflow.ellipsis,
               ),
-            ]),
-          ],
-        ),
+            ),
+          ]),
+        ]),
       );
 }
-
-// ─── Reusable action button (unchanged from original) ─────────────────────────
 
 class _ActionBtn extends StatelessWidget {
   final IconData icon;
@@ -661,36 +558,31 @@ class _ActionBtn extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(
           color: color.withValues(alpha: disabled ? 0.04 : 0.1),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
-              color: color.withValues(
-                  alpha: disabled ? 0.12 : 0.3)),
+              color: color.withValues(alpha: disabled ? 0.12 : 0.3)),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (isLoading)
-              SizedBox(
-                width: 13,
-                height: 13,
-                child: CircularProgressIndicator(
-                    strokeWidth: 1.8,
-                    valueColor: AlwaysStoppedAnimation<Color>(color)),
-              )
-            else
-              Icon(icon, size: 13, color: color),
-            const SizedBox(width: 5),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: color)),
-          ],
-        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (isLoading)
+            SizedBox(
+              width: 13,
+              height: 13,
+              child: CircularProgressIndicator(
+                  strokeWidth: 1.8,
+                  valueColor: AlwaysStoppedAnimation<Color>(color)),
+            )
+          else
+            Icon(icon, size: 13, color: color),
+          const SizedBox(width: 5),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: color)),
+        ]),
       ),
     );
   }

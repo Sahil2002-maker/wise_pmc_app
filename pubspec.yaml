@@ -2,7 +2,7 @@ name: wise_pmc_app
 description: "Wise PMC App"
 publish_to: 'none'
 
-version: 1.0.0+12
+version: 1.0.0+14
 
 environment:
   sdk: ^3.5.0

@@ -3,6 +3,13 @@
 // UI restyled to match the Cement Checklist screen pattern exactly
 // (header info-card, tinted card header with numbered badge + tag chip,
 // info row, outlined action chips). All functionality is unchanged.
+//
+// Fix: RenderFlex overflow in _infoItem inner Row resolved by replacing
+// the Row(Icon + Text) with a single Row that uses Flexible on the Text
+// and wrapping the three-column info row with IntrinsicHeight/LayoutBuilder
+// awareness — simplest fix: constrain each _infoItem's inner content
+// with overflow: TextOverflow.ellipsis and softWrap:false on the value Text,
+// plus remove the nested Expanded from inside _infoItem and use Flexible instead.
 
 import 'package:flutter/material.dart';
 
@@ -38,7 +45,7 @@ class _DprListPageState extends State<DprListPage> {
   List<DailyProjectReportSummary> _reports = [];
 
   final Set<int> _deletingIds   = {};
-  int? _downloadingId; // id of the report currently being downloaded
+  int? _downloadingId;
 
   @override
   void initState() {
@@ -64,8 +71,6 @@ class _DprListPageState extends State<DprListPage> {
       }
     }
   }
-
-  // ── Navigate to form ───────────────────────────────────────────────────────
 
   Future<void> _openCreate() async {
     final result = await Navigator.push<bool>(
@@ -108,13 +113,8 @@ class _DprListPageState extends State<DprListPage> {
     );
   }
 
-  // ── Print / Download PDF ───────────────────────────────────────────────────
-  // Downloads the server-generated PDF and opens it in the device's native
-  // PDF viewer. The viewer's own toolbar provides Print + Share, so one
-  // action covers both "Print" and "Download" — identical to Material Stock.
-
   Future<void> _downloadPdf(DailyProjectReportSummary summary) async {
-    if (_downloadingId != null) return; // prevent double taps
+    if (_downloadingId != null) return;
     setState(() => _downloadingId = summary.id);
 
     final url =
@@ -135,8 +135,6 @@ class _DprListPageState extends State<DprListPage> {
       );
     }
   }
-
-  // ── Delete ────────────────────────────────────────────────────────────────
 
   Future<void> _confirmDelete(DailyProjectReportSummary summary) async {
     final confirm = await showDialog<bool>(
@@ -201,8 +199,6 @@ class _DprListPageState extends State<DprListPage> {
     );
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -223,10 +219,8 @@ class _DprListPageState extends State<DprListPage> {
                               delegate: SliverChildBuilderDelegate(
                                 (_, index) {
                                   final r = _reports[index];
-                                  final isDeleting =
-                                      _deletingIds.contains(r.id);
-                                  final isDownloading =
-                                      _downloadingId == r.id;
+                                  final isDeleting   = _deletingIds.contains(r.id);
+                                  final isDownloading = _downloadingId == r.id;
                                   return _buildCard(
                                     r,
                                     index,
@@ -252,7 +246,6 @@ class _DprListPageState extends State<DprListPage> {
     );
   }
 
-  // ── Header — matches Cement Checklist header card ─────────────────────────
   Widget _buildHeader() => Container(
         margin: const EdgeInsets.all(16),
         padding: const EdgeInsets.all(16),
@@ -322,7 +315,6 @@ class _DprListPageState extends State<DprListPage> {
         ),
       );
 
-  // ── Error state ────────────────────────────────────────────────────────────
   Widget _buildError() => Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -355,7 +347,6 @@ class _DprListPageState extends State<DprListPage> {
         ),
       );
 
-  // ── Empty state — matches Cement Checklist empty style ─────────────────────
   Widget _buildEmpty() => Center(
         child: Padding(
           padding: const EdgeInsets.all(40),
@@ -388,7 +379,6 @@ class _DprListPageState extends State<DprListPage> {
         ),
       );
 
-  // ── Card — matches Cement Checklist card style ─────────────────────────────
   Widget _buildCard(
     DailyProjectReportSummary report,
     int index, {
@@ -411,7 +401,7 @@ class _DprListPageState extends State<DprListPage> {
       ),
       child: Column(
         children: [
-          // ── card header (tinted background) ─────────────────────────────
+          // ── card header ──────────────────────────────────────────────────
           Container(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
             decoration: BoxDecoration(
@@ -489,19 +479,32 @@ class _DprListPageState extends State<DprListPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // ── FIX: use IntrinsicWidth-safe Row with no nested Expanded ──
+                // Each _infoItem is wrapped in Expanded at this level only.
+                // Inside _infoItem we use Flexible instead of Expanded on the
+                // value Text so it can shrink without overflowing.
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _infoItem(Icons.calendar_today_outlined, 'Date',
-                        report.reportDate ?? 'N/A'),
-                    const SizedBox(width: 16),
-                    _infoItem(Icons.photo_library_outlined, 'Photos',
-                        '${report.totalPhotos}'),
-                    const SizedBox(width: 16),
-                    _infoItem(Icons.people_outline, 'Agencies',
-                        '${report.laborCount}'),
+                    _infoItem(
+                      Icons.calendar_today_outlined,
+                      'Date',
+                      report.reportDate ?? 'N/A',
+                    ),
+                    _infoItem(
+                      Icons.photo_library_outlined,
+                      'Photos',
+                      '${report.totalPhotos}',
+                    ),
+                    _infoItem(
+                      Icons.people_outline,
+                      'Agencies',
+                      '${report.laborCount}',
+                    ),
                   ],
                 ),
-                // Section indicators
+
+                // Section indicator dots
                 if (report.hasDecisions ||
                     report.hasBottleNecks ||
                     report.hasMaterialDelivered ||
@@ -510,22 +513,28 @@ class _DprListPageState extends State<DprListPage> {
                   Wrap(spacing: 6, runSpacing: 4, children: [
                     if (report.hasDecisions)
                       _SectionDot(
-                          label: 'Decisions', color: const Color(0xFF7C3AED)),
+                          label: 'Decisions',
+                          color: const Color(0xFF7C3AED)),
                     if (report.hasBottleNecks)
                       _SectionDot(
-                          label: 'Issues', color: const Color(0xFFEF4444)),
+                          label: 'Issues',
+                          color: const Color(0xFFEF4444)),
                     if (report.hasMaterialDelivered)
                       _SectionDot(
-                          label: 'Materials', color: const Color(0xFF10B981)),
+                          label: 'Materials',
+                          color: const Color(0xFF10B981)),
                     if (report.hasEhs)
                       _SectionDot(
-                          label: 'EHS', color: const Color(0xFFF59E0B)),
+                          label: 'EHS',
+                          color: const Color(0xFFF59E0B)),
                   ]),
                 ],
+
                 const SizedBox(height: 12),
                 const Divider(height: 1, color: Color(0xFFF1F5F9)),
                 const SizedBox(height: 10),
-                // ── Action buttons — outlined style matching Cement Checklist ──
+
+                // ── Action buttons ────────────────────────────────────────
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
@@ -566,44 +575,56 @@ class _DprListPageState extends State<DprListPage> {
     );
   }
 
-  // ── Info item — matches Cement Checklist info item style ──────────────────
-  Widget _infoItem(IconData icon, String label, String value) => Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 9,
-                color: Color(0xFF94A3B8),
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.3,
-              ),
+  // ── _infoItem ──────────────────────────────────────────────────────────────
+  //
+  // FIX: Changed from returning an `Expanded` widget (which must be a direct
+  // child of Row/Column) to returning a plain widget wrapped in `Expanded`
+  // at the call site — but since we call it inline in the Row, we keep
+  // Expanded here. The real fix is inside: replaced the inner `Expanded`
+  // on the Text with `Flexible` + `overflow: TextOverflow.ellipsis` and
+  // `softWrap: false`, which prevents the inner Row from demanding more
+  // width than its parent Expanded cell can provide.
+  Widget _infoItem(IconData icon, String label, String value) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 9,
+              color: Color(0xFF94A3B8),
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.3,
             ),
-            const SizedBox(height: 2),
-            Row(
-              children: [
-                Icon(icon, size: 11, color: const Color(0xFF64748B)),
-                const SizedBox(width: 3),
-                Expanded(
-                  child: Text(
-                    value.isNotEmpty ? value : 'N/A',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF1E293B),
-                      fontWeight: FontWeight.w500,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Row(
+            mainAxisSize: MainAxisSize.min,   // ← key fix: don't expand Row
+            children: [
+              Icon(icon, size: 11, color: const Color(0xFF64748B)),
+              const SizedBox(width: 3),
+              Flexible(                        // ← was Expanded; Flexible shrinks
+                child: Text(
+                  value.isNotEmpty ? value : 'N/A',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF1E293B),
+                    fontWeight: FontWeight.w500,
                   ),
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
                 ),
-              ],
-            ),
-          ],
-        ),
-      );
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-// ── Action button — outlined style matching Cement Checklist ────────────────
+// ── Action button ─────────────────────────────────────────────────────────────
 
 class _ActionBtn extends StatelessWidget {
   final IconData      icon;
@@ -663,7 +684,7 @@ class _ActionBtn extends StatelessWidget {
   }
 }
 
-// ─── Small helpers (unchanged) ────────────────────────────────────────────────
+// ─── Small helpers ────────────────────────────────────────────────────────────
 
 class _WeatherChip extends StatelessWidget {
   final String weather;

@@ -1,8 +1,10 @@
 // lib/features/stage21/data/models/material_weight_measurement_model.dart
 //
-// UPDATED: Full multi-photo support per slot.
-// The backend now returns *_photos arrays (list of {path, url, geo}).
-// Single-photo convenience fields (*_url, *_geo) are kept for compatibility.
+// UPDATED: Full cement + steel dual-type support.
+// Each entry now has an `entryType` field ('steel' | 'cement').
+// Steel entries: gross/tare weights + 3 photo slots.
+// Cement entries: ordered/received bag counts + 2 photo slots.
+// Multi-photo arrays are used throughout (matching the web backend).
 
 import 'dart:io';
 
@@ -14,6 +16,7 @@ class MwmListModel {
   final String measurementDate;
   final int entryCount;
   final String totalNetWeight;
+  final String? totalReceivedBags;
   final String? remarks;
   final String? creatorName;
 
@@ -23,6 +26,7 @@ class MwmListModel {
     required this.measurementDate,
     required this.entryCount,
     required this.totalNetWeight,
+    this.totalReceivedBags,
     this.remarks,
     this.creatorName,
   });
@@ -39,6 +43,7 @@ class MwmListModel {
           ? json['entry_count'] as int
           : int.tryParse(json['entry_count'].toString()) ?? 0,
       totalNetWeight: json['total_net_weight']?.toString() ?? '0.000',
+      totalReceivedBags: json['total_received_bags']?.toString(),
       remarks: json['remarks']?.toString(),
       creatorName: creator is Map ? creator['name']?.toString() : null,
     );
@@ -86,235 +91,170 @@ class MwmGeoPoint {
   }
 }
 
-// ─── Single photo item (one photo in a multi-photo slot) ──────────────────
-//
-// Mirrors the backend shape: { path: string, url: string|null, geo: {...}|null }
+// ─── Single photo item ─────────────────────────────────────────────────────
 
 class MwmPhotoItem {
-  /// Raw S3 key, e.g. "MWM/MWM_131_E0GrossSlip_abc123_1234567890.jpg"
-  /// Used to determine file type (image vs PDF) and as a stable identifier.
   final String path;
-
-  /// Signed S3 URL. Valid for ~120 minutes. Use this to display/open the file.
   final String? url;
-
-  /// GPS location captured at photo time (may be null).
   final MwmGeoPoint? geo;
 
-  MwmPhotoItem({
-    required this.path,
-    this.url,
-    this.geo,
-  });
+  MwmPhotoItem({required this.path, this.url, this.geo});
 
-  /// Whether this is an image file (jpg/jpeg/png/gif/webp).
   bool get isImage {
     if (path.isEmpty) return false;
     final ext = path.split('.').last.toLowerCase();
     return ['jpg', 'jpeg', 'png', 'gif', 'webp'].contains(ext);
   }
 
-  /// Whether this is a PDF file.
   bool get isPdf => path.split('.').last.toLowerCase() == 'pdf';
 
-  factory MwmPhotoItem.fromJson(Map<String, dynamic> json) {
-    final rawPath = json['path']?.toString() ?? '';
-    return MwmPhotoItem(
-      path: rawPath,
-      url: json['url']?.toString(),
-      geo: MwmGeoPoint.tryParse(json['geo']),
-    );
-  }
+  factory MwmPhotoItem.fromJson(Map<String, dynamic> json) => MwmPhotoItem(
+        path: json['path']?.toString() ?? '',
+        url: json['url']?.toString(),
+        geo: MwmGeoPoint.tryParse(json['geo']),
+      );
 
-  /// Parse a raw slot value from the API into a list of MwmPhotoItem.
-  ///
-  /// Handles every shape the backend may return:
-  ///   - null                              → []
-  ///   - ""                               → []
-  ///   - "MWM/xyz.jpg"                    → single item (old scalar, no URL)
-  ///   - { path, url, geo }               → single item
-  ///   - [{ path, url, geo }, ...]        → multiple items  ✓ (new format)
+  /// Parse any shape the API might return for a photo slot.
   static List<MwmPhotoItem> parseSlot(dynamic raw) {
     if (raw == null) return [];
-
-    // Plain string (old format — no signed URL included)
     if (raw is String) {
       final s = raw.trim();
       if (s.isEmpty || s == 'null') return [];
-      return [MwmPhotoItem(path: s, url: null, geo: null)];
+      return [MwmPhotoItem(path: s)];
     }
-
-    // Single map { path, url, geo }
     if (raw is Map<String, dynamic>) {
       final path = raw['path']?.toString() ?? '';
       if (path.isEmpty) return [];
       return [MwmPhotoItem.fromJson(raw)];
     }
-
-    // Array
     if (raw is List) {
       final items = <MwmPhotoItem>[];
       for (final item in raw) {
         if (item is String && item.trim().isNotEmpty && item != 'null') {
-          items.add(MwmPhotoItem(path: item.trim(), url: null, geo: null));
+          items.add(MwmPhotoItem(path: item.trim()));
         } else if (item is Map<String, dynamic>) {
           final path = item['path']?.toString() ?? '';
-          if (path.isNotEmpty) {
-            items.add(MwmPhotoItem.fromJson(item));
-          }
+          if (path.isNotEmpty) items.add(MwmPhotoItem.fromJson(item));
         }
       }
       return items;
     }
-
     return [];
   }
 }
 
-// ─── Detail entry (full, read-only view) ──────────────────────────────────
+// ─── Entry type enum ───────────────────────────────────────────────────────
+
+enum MwmEntryType { steel, cement }
+
+extension MwmEntryTypeX on MwmEntryType {
+  String get value => name; // 'steel' | 'cement'
+  static MwmEntryType from(String? s) =>
+      s == 'cement' ? MwmEntryType.cement : MwmEntryType.steel;
+}
+
+// ─── Detail entry (view) ───────────────────────────────────────────────────
 
 class MwmEntryModel {
+  final MwmEntryType entryType;
+
+  // Shared
   final String vehicleNumber;
   final String challanNumber;
   final int materialTypeId;
   final String materialTypeName;
 
+  // Steel-only
   final double grossWeight;
   final String grossWeightFormatted;
-
-  /// Multi-photo list for the gross weight slip slot.
   final List<MwmPhotoItem> grossWeightSlipPhotos;
-
-  /// Multi-photo list for the vehicle-with-material-image slot.
   final List<MwmPhotoItem> vehicleWithMaterialImagePhotos;
-
   final double tareWeight;
   final String tareWeightFormatted;
-
-  /// Multi-photo list for the tare weight slip slot.
   final List<MwmPhotoItem> tareWeightSlipPhotos;
-
   final double netWeight;
   final String netWeightFormatted;
 
+  // Cement-only
+  final int totalOrderedBags;
+  final int totalReceivedBags;
+  final int remainingBags;
+  final List<MwmPhotoItem> orderedBagReceiptImagePhotos;
+  final List<MwmPhotoItem> receivedBagImagePhotos;
+
   MwmEntryModel({
+    required this.entryType,
     required this.vehicleNumber,
     required this.challanNumber,
     required this.materialTypeId,
     required this.materialTypeName,
-    required this.grossWeight,
-    required this.grossWeightFormatted,
-    required this.grossWeightSlipPhotos,
-    required this.vehicleWithMaterialImagePhotos,
-    required this.tareWeight,
-    required this.tareWeightFormatted,
-    required this.tareWeightSlipPhotos,
-    required this.netWeight,
-    required this.netWeightFormatted,
+    this.grossWeight = 0,
+    this.grossWeightFormatted = '0.000',
+    this.grossWeightSlipPhotos = const [],
+    this.vehicleWithMaterialImagePhotos = const [],
+    this.tareWeight = 0,
+    this.tareWeightFormatted = '0.000',
+    this.tareWeightSlipPhotos = const [],
+    this.netWeight = 0,
+    this.netWeightFormatted = '0.000',
+    this.totalOrderedBags = 0,
+    this.totalReceivedBags = 0,
+    this.remainingBags = 0,
+    this.orderedBagReceiptImagePhotos = const [],
+    this.receivedBagImagePhotos = const [],
   });
 
-  // ── Convenience getters (first photo of each slot) ──────────────────────
-
-  MwmPhotoItem? get grossWeightSlipFirst =>
-      grossWeightSlipPhotos.isNotEmpty ? grossWeightSlipPhotos.first : null;
-
-  MwmPhotoItem? get vehicleWithMaterialImageFirst =>
-      vehicleWithMaterialImagePhotos.isNotEmpty
-          ? vehicleWithMaterialImagePhotos.first
-          : null;
-
-  MwmPhotoItem? get tareWeightSlipFirst =>
-      tareWeightSlipPhotos.isNotEmpty ? tareWeightSlipPhotos.first : null;
+  bool get isCement => entryType == MwmEntryType.cement;
+  bool get isSteel => entryType == MwmEntryType.steel;
 
   factory MwmEntryModel.fromJson(Map<String, dynamic> json) {
-    // ── Parse multi-photo slots ─────────────────────────────────────────────
-    //
-    // Priority (for each slot):
-    //  1. *_photos  array  — new format returned by updated mobile controller
-    //  2. *_slip / *_image scalar + *_slip_url — old single-photo format
-    //
-    // This ensures both old and new records display correctly.
+    final type = MwmEntryTypeX.from(json['entry_type']?.toString());
 
-    List<MwmPhotoItem> parseWithFallback(
-      String photosKey,
-      String pathKey,
-      String urlKey,
-      String geoKey,
-    ) {
-      // Try the new *_photos array first
-      final photosRaw = json[photosKey];
-      if (photosRaw is List && photosRaw.isNotEmpty) {
-        return MwmPhotoItem.parseSlot(photosRaw);
-      }
+    List<MwmPhotoItem> photos(String photosKey) =>
+        MwmPhotoItem.parseSlot(json[photosKey]);
 
-      // Fall back to the scalar path + url fields
-      final path = json[pathKey]?.toString();
-      final url  = json[urlKey]?.toString();
-
-      if (path != null && path.isNotEmpty && path != 'null') {
-        return [
-          MwmPhotoItem(
-            path: path,
-            url: (url != null && url.isNotEmpty && url != 'null') ? url : null,
-            geo: MwmGeoPoint.tryParse(json[geoKey]),
-          ),
-        ];
-      }
-
-      // Nothing found
-      return [];
+    if (type == MwmEntryType.cement) {
+      return MwmEntryModel(
+        entryType: type,
+        vehicleNumber: json['vehicle_number']?.toString() ?? '',
+        challanNumber: json['challan_number']?.toString() ?? '',
+        materialTypeId: _parseInt(json['material_type_id']),
+        materialTypeName: json['material_type_name']?.toString() ?? '—',
+        totalOrderedBags: _parseInt(json['total_ordered_bags']),
+        totalReceivedBags: _parseInt(json['total_received_bags']),
+        remainingBags: _parseInt(json['remaining_bags'] ?? json['remaining_bags_fmt']),
+        orderedBagReceiptImagePhotos: photos('ordered_bag_receipt_image_photos'),
+        receivedBagImagePhotos: photos('received_bag_image_photos'),
+      );
     }
 
-    final grossPhotos = parseWithFallback(
-      'gross_weight_slip_photos',
-      'gross_weight_slip',
-      'gross_weight_slip_url',
-      'gross_weight_slip_geo',
-    );
-    final vehiclePhotos = parseWithFallback(
-      'vehicle_with_material_image_photos',
-      'vehicle_with_material_image',
-      'vehicle_with_material_image_url',
-      'vehicle_with_material_image_geo',
-    );
-    final tarePhotos = parseWithFallback(
-      'tare_weight_slip_photos',
-      'tare_weight_slip',
-      'tare_weight_slip_url',
-      'tare_weight_slip_geo',
-    );
-
-    final grossWeight =
-        double.tryParse(json['gross_weight'].toString()) ?? 0;
-    final tareWeight =
-        double.tryParse(json['tare_weight'].toString()) ?? 0;
-    final netWeight =
-        double.tryParse(json['net_material_weight'].toString()) ?? 0;
-
+    // Steel
+    final gross = _parseDouble(json['gross_weight']);
+    final tare  = _parseDouble(json['tare_weight']);
+    final net   = _parseDouble(json['net_material_weight']);
     return MwmEntryModel(
+      entryType: type,
       vehicleNumber: json['vehicle_number']?.toString() ?? '',
       challanNumber: json['challan_number']?.toString() ?? '',
-      materialTypeId: json['material_type_id'] is int
-          ? json['material_type_id'] as int
-          : int.tryParse(json['material_type_id'].toString()) ?? 0,
+      materialTypeId: _parseInt(json['material_type_id']),
       materialTypeName: json['material_type_name']?.toString() ?? '—',
-      grossWeight: grossWeight,
-      grossWeightFormatted: json['gross_weight_fmt']?.toString() ??
-          grossWeight.toStringAsFixed(3),
-      grossWeightSlipPhotos: grossPhotos,
-      vehicleWithMaterialImagePhotos: vehiclePhotos,
-      tareWeight: tareWeight,
-      tareWeightFormatted: json['tare_weight_fmt']?.toString() ??
-          tareWeight.toStringAsFixed(3),
-      tareWeightSlipPhotos: tarePhotos,
-      netWeight: netWeight,
-      netWeightFormatted: json['net_weight_fmt']?.toString() ??
-          netWeight.toStringAsFixed(3),
+      grossWeight: gross,
+      grossWeightFormatted:
+          json['gross_weight_fmt']?.toString() ?? gross.toStringAsFixed(3),
+      grossWeightSlipPhotos: photos('gross_weight_slip_photos'),
+      vehicleWithMaterialImagePhotos: photos('vehicle_with_material_image_photos'),
+      tareWeight: tare,
+      tareWeightFormatted:
+          json['tare_weight_fmt']?.toString() ?? tare.toStringAsFixed(3),
+      tareWeightSlipPhotos: photos('tare_weight_slip_photos'),
+      netWeight: net,
+      netWeightFormatted:
+          json['net_weight_fmt']?.toString() ?? net.toStringAsFixed(3),
     );
   }
 }
 
-// ─── Detail (full record for View page) ───────────────────────────────────
+// ─── Detail (full record) ──────────────────────────────────────────────────
 
 class MwmDetailModel {
   final int id;
@@ -338,9 +278,7 @@ class MwmDetailModel {
   factory MwmDetailModel.fromJson(Map<String, dynamic> json) {
     final rawEntries = json['entries'] as List? ?? [];
     return MwmDetailModel(
-      id: json['id'] is int
-          ? json['id'] as int
-          : int.tryParse(json['id'].toString()) ?? 0,
+      id: _parseInt(json['id']),
       mwmNo: json['mwm_no']?.toString() ?? '',
       measurementDateFormatted:
           json['measurement_date_formatted']?.toString() ?? '',
@@ -358,85 +296,67 @@ class MwmDetailModel {
 // ─── Edit-prefill entry ────────────────────────────────────────────────────
 
 class MwmEditEntry {
+  final MwmEntryType entryType;
   final String vehicleNumber;
   final String challanNumber;
   final int materialTypeId;
 
+  // Steel
   final double grossWeight;
-
-  /// Photos for the gross weight slip slot (edit prefill).
   final List<MwmPhotoItem> grossWeightSlipPhotos;
-
-  /// Photos for the vehicle-with-material-image slot (edit prefill).
   final List<MwmPhotoItem> vehicleWithMaterialImagePhotos;
-
   final double tareWeight;
-
-  /// Photos for the tare weight slip slot (edit prefill).
   final List<MwmPhotoItem> tareWeightSlipPhotos;
 
+  // Cement
+  final int totalOrderedBags;
+  final int totalReceivedBags;
+  final List<MwmPhotoItem> orderedBagReceiptImagePhotos;
+  final List<MwmPhotoItem> receivedBagImagePhotos;
+
   MwmEditEntry({
+    required this.entryType,
     required this.vehicleNumber,
     required this.challanNumber,
     required this.materialTypeId,
-    required this.grossWeight,
-    required this.grossWeightSlipPhotos,
-    required this.vehicleWithMaterialImagePhotos,
-    required this.tareWeight,
-    required this.tareWeightSlipPhotos,
+    this.grossWeight = 0,
+    this.grossWeightSlipPhotos = const [],
+    this.vehicleWithMaterialImagePhotos = const [],
+    this.tareWeight = 0,
+    this.tareWeightSlipPhotos = const [],
+    this.totalOrderedBags = 0,
+    this.totalReceivedBags = 0,
+    this.orderedBagReceiptImagePhotos = const [],
+    this.receivedBagImagePhotos = const [],
   });
 
   factory MwmEditEntry.fromJson(Map<String, dynamic> json) {
-    List<MwmPhotoItem> parseWithFallback(
-      String photosKey,
-      String pathKey,
-      String urlKey,
-      String geoKey,
-    ) {
-      final photosRaw = json[photosKey];
-      if (photosRaw is List && photosRaw.isNotEmpty) {
-        return MwmPhotoItem.parseSlot(photosRaw);
-      }
-      final path = json[pathKey]?.toString();
-      final url  = json[urlKey]?.toString();
-      if (path != null && path.isNotEmpty && path != 'null') {
-        return [
-          MwmPhotoItem(
-            path: path,
-            url: (url != null && url.isNotEmpty && url != 'null') ? url : null,
-            geo: MwmGeoPoint.tryParse(json[geoKey]),
-          ),
-        ];
-      }
-      return [];
+    final type = MwmEntryTypeX.from(json['entry_type']?.toString());
+    List<MwmPhotoItem> photos(String key) => MwmPhotoItem.parseSlot(json[key]);
+
+    if (type == MwmEntryType.cement) {
+      return MwmEditEntry(
+        entryType: type,
+        vehicleNumber: json['vehicle_number']?.toString() ?? '',
+        challanNumber: json['challan_number']?.toString() ?? '',
+        materialTypeId: _parseInt(json['material_type_id']),
+        totalOrderedBags: _parseInt(json['total_ordered_bags']),
+        totalReceivedBags: _parseInt(json['total_received_bags']),
+        orderedBagReceiptImagePhotos: photos('ordered_bag_receipt_image_photos'),
+        receivedBagImagePhotos: photos('received_bag_image_photos'),
+      );
     }
 
     return MwmEditEntry(
+      entryType: type,
       vehicleNumber: json['vehicle_number']?.toString() ?? '',
       challanNumber: json['challan_number']?.toString() ?? '',
-      materialTypeId: json['material_type_id'] is int
-          ? json['material_type_id'] as int
-          : int.tryParse(json['material_type_id'].toString()) ?? 0,
-      grossWeight: double.tryParse(json['gross_weight'].toString()) ?? 0,
-      grossWeightSlipPhotos: parseWithFallback(
-        'gross_weight_slip_photos',
-        'gross_weight_slip',
-        'gross_weight_slip_url',
-        'gross_weight_slip_geo',
-      ),
-      vehicleWithMaterialImagePhotos: parseWithFallback(
-        'vehicle_with_material_image_photos',
-        'vehicle_with_material_image',
-        'vehicle_with_material_image_url',
-        'vehicle_with_material_image_geo',
-      ),
-      tareWeight: double.tryParse(json['tare_weight'].toString()) ?? 0,
-      tareWeightSlipPhotos: parseWithFallback(
-        'tare_weight_slip_photos',
-        'tare_weight_slip',
-        'tare_weight_slip_url',
-        'tare_weight_slip_geo',
-      ),
+      materialTypeId: _parseInt(json['material_type_id']),
+      grossWeight: _parseDouble(json['gross_weight']),
+      grossWeightSlipPhotos: photos('gross_weight_slip_photos'),
+      vehicleWithMaterialImagePhotos: photos('vehicle_with_material_image_photos'),
+      tareWeight: _parseDouble(json['tare_weight']),
+      tareWeightSlipPhotos: photos('tare_weight_slip_photos'),
     );
   }
 }
@@ -459,9 +379,7 @@ class MwmEditModel {
   factory MwmEditModel.fromJson(Map<String, dynamic> json) {
     final rawEntries = json['entries'] as List? ?? [];
     return MwmEditModel(
-      id: json['id'] is int
-          ? json['id'] as int
-          : int.tryParse(json['id'].toString()) ?? 0,
+      id: _parseInt(json['id']),
       mwmNo: json['mwm_no']?.toString() ?? '',
       measurementDateFormatted:
           json['measurement_date_formatted']?.toString() ?? '',
@@ -474,7 +392,7 @@ class MwmEditModel {
   }
 }
 
-// ─── Material type (dropdown option) ───────────────────────────────────────
+// ─── Material type ─────────────────────────────────────────────────────────
 
 class MwmMaterialTypeModel {
   final int id;
@@ -484,9 +402,7 @@ class MwmMaterialTypeModel {
 
   factory MwmMaterialTypeModel.fromJson(Map<String, dynamic> json) =>
       MwmMaterialTypeModel(
-        id: json['id'] is int
-            ? json['id'] as int
-            : int.tryParse(json['id'].toString()) ?? 0,
+        id: _parseInt(json['id']),
         name: json['name']?.toString() ?? '',
       );
 
@@ -498,58 +414,35 @@ class MwmMaterialTypeModel {
   int get hashCode => id.hashCode;
 }
 
-// ─── File slot state (used inside MwmEntryForm) ───────────────────────────
-//
-// Now supports multiple existing photos per slot (from the server) and one
-// new file picked/captured by the user for upload.
+// ─── File slot (single-pick, for the mobile form) ─────────────────────────
 
 class MwmFileSlot {
-  /// New file selected by the user (gallery or camera). Only one per slot
-  /// for the mobile create/edit flow (keeps the upload simple).
   final File? newFile;
-
-  /// True when the user removed the existing file(s) and no new file chosen.
   final bool removed;
-
-  /// Geo for the newly captured photo.
   final MwmGeoPoint? geo;
-
-  /// Existing photos from the server (may be multiple).
   final List<MwmPhotoItem> existingPhotos;
 
-  MwmFileSlot({
+  const MwmFileSlot({
     this.newFile,
     this.removed = false,
     this.geo,
     this.existingPhotos = const [],
   });
 
-  // ── Convenience getters ──────────────────────────────────────────────────
-
-  /// First existing photo (for display when no new file chosen).
   MwmPhotoItem? get firstExisting =>
       (!removed && existingPhotos.isNotEmpty) ? existingPhotos.first : null;
 
-  /// True when the slot has a usable existing photo (not removed).
   bool get hasExisting => !removed && existingPhotos.isNotEmpty && newFile == null;
-
   bool get hasNew => newFile != null;
   bool get isEmpty => !hasExisting && !hasNew;
 
-  /// The display URL — new file's local path or first existing signed URL.
   String? get displayUrl {
     if (hasNew) return newFile!.path;
     return firstExisting?.url;
   }
 
-  /// Signed URL of the first existing server photo.
-  /// Used by the edit form to preview the current server-side file.
   String? get existingUrl => firstExisting?.url;
-
-  /// True when the existing content is an image.
   bool get existingIsImage => firstExisting?.isImage ?? false;
-
-  /// True when the existing content is a PDF.
   bool get existingIsPdf => firstExisting?.isPdf ?? false;
 
   MwmFileSlot copyWith({
@@ -571,62 +464,99 @@ class MwmFileSlot {
 // ─── Form entry (create/edit working copy) ────────────────────────────────
 
 class MwmEntryForm {
+  final MwmEntryType entryType;
   String vehicleNumber;
   String challanNumber;
   MwmMaterialTypeModel? materialType;
+
+  // Steel
   double grossWeight;
   double tareWeight;
-
-  final int? originalIndex;
-
   MwmFileSlot grossWeightSlip;
   MwmFileSlot vehicleWithMaterialImage;
   MwmFileSlot tareWeightSlip;
 
+  // Cement
+  int totalOrderedBags;
+  int totalReceivedBags;
+  MwmFileSlot orderedBagReceiptImage;
+  MwmFileSlot receivedBagImage;
+
+  final int? originalIndex;
+
   MwmEntryForm({
+    this.entryType = MwmEntryType.steel,
     this.vehicleNumber = '',
     this.challanNumber = '',
     this.materialType,
     this.grossWeight = 0.0,
     this.tareWeight = 0.0,
-    this.originalIndex,
     MwmFileSlot? grossWeightSlip,
     MwmFileSlot? vehicleWithMaterialImage,
     MwmFileSlot? tareWeightSlip,
-  })  : grossWeightSlip = grossWeightSlip ?? MwmFileSlot(),
+    this.totalOrderedBags = 0,
+    this.totalReceivedBags = 0,
+    MwmFileSlot? orderedBagReceiptImage,
+    MwmFileSlot? receivedBagImage,
+    this.originalIndex,
+  })  : grossWeightSlip = grossWeightSlip ?? const MwmFileSlot(),
         vehicleWithMaterialImage =
-            vehicleWithMaterialImage ?? MwmFileSlot(),
-        tareWeightSlip = tareWeightSlip ?? MwmFileSlot();
+            vehicleWithMaterialImage ?? const MwmFileSlot(),
+        tareWeightSlip = tareWeightSlip ?? const MwmFileSlot(),
+        orderedBagReceiptImage =
+            orderedBagReceiptImage ?? const MwmFileSlot(),
+        receivedBagImage = receivedBagImage ?? const MwmFileSlot();
 
   factory MwmEntryForm.fromEdit(
     MwmEditEntry e,
     int originalIndex,
     MwmMaterialTypeModel? matchedType,
-  ) =>
-      MwmEntryForm(
+  ) {
+    if (e.entryType == MwmEntryType.cement) {
+      return MwmEntryForm(
+        entryType: MwmEntryType.cement,
         vehicleNumber: e.vehicleNumber,
         challanNumber: e.challanNumber,
         materialType: matchedType,
-        grossWeight: e.grossWeight,
-        tareWeight: e.tareWeight,
+        totalOrderedBags: e.totalOrderedBags,
+        totalReceivedBags: e.totalReceivedBags,
+        orderedBagReceiptImage:
+            MwmFileSlot(existingPhotos: e.orderedBagReceiptImagePhotos),
+        receivedBagImage:
+            MwmFileSlot(existingPhotos: e.receivedBagImagePhotos),
         originalIndex: originalIndex,
-        grossWeightSlip: MwmFileSlot(
-          existingPhotos: e.grossWeightSlipPhotos,
-        ),
-        vehicleWithMaterialImage: MwmFileSlot(
-          existingPhotos: e.vehicleWithMaterialImagePhotos,
-        ),
-        tareWeightSlip: MwmFileSlot(
-          existingPhotos: e.tareWeightSlipPhotos,
-        ),
       );
+    }
+    return MwmEntryForm(
+      entryType: MwmEntryType.steel,
+      vehicleNumber: e.vehicleNumber,
+      challanNumber: e.challanNumber,
+      materialType: matchedType,
+      grossWeight: e.grossWeight,
+      tareWeight: e.tareWeight,
+      grossWeightSlip: MwmFileSlot(existingPhotos: e.grossWeightSlipPhotos),
+      vehicleWithMaterialImage:
+          MwmFileSlot(existingPhotos: e.vehicleWithMaterialImagePhotos),
+      tareWeightSlip: MwmFileSlot(existingPhotos: e.tareWeightSlipPhotos),
+      originalIndex: originalIndex,
+    );
+  }
+
+  bool get isCement => entryType == MwmEntryType.cement;
+  bool get isSteel => entryType == MwmEntryType.steel;
 
   double get netWeight {
     final n = grossWeight - tareWeight;
     return n < 0 ? 0 : n;
   }
 
+  int get remainingBags {
+    final r = totalOrderedBags - totalReceivedBags;
+    return r < 0 ? 0 : r;
+  }
+
   MwmEntryForm copyWith({
+    MwmEntryType? entryType,
     String? vehicleNumber,
     String? challanNumber,
     MwmMaterialTypeModel? materialType,
@@ -636,18 +566,36 @@ class MwmEntryForm {
     MwmFileSlot? grossWeightSlip,
     MwmFileSlot? vehicleWithMaterialImage,
     MwmFileSlot? tareWeightSlip,
+    int? totalOrderedBags,
+    int? totalReceivedBags,
+    MwmFileSlot? orderedBagReceiptImage,
+    MwmFileSlot? receivedBagImage,
   }) =>
       MwmEntryForm(
+        entryType: entryType ?? this.entryType,
         vehicleNumber: vehicleNumber ?? this.vehicleNumber,
         challanNumber: challanNumber ?? this.challanNumber,
         materialType:
             clearMaterialType ? null : (materialType ?? this.materialType),
         grossWeight: grossWeight ?? this.grossWeight,
         tareWeight: tareWeight ?? this.tareWeight,
-        originalIndex: originalIndex,
         grossWeightSlip: grossWeightSlip ?? this.grossWeightSlip,
         vehicleWithMaterialImage:
             vehicleWithMaterialImage ?? this.vehicleWithMaterialImage,
         tareWeightSlip: tareWeightSlip ?? this.tareWeightSlip,
+        totalOrderedBags: totalOrderedBags ?? this.totalOrderedBags,
+        totalReceivedBags: totalReceivedBags ?? this.totalReceivedBags,
+        orderedBagReceiptImage:
+            orderedBagReceiptImage ?? this.orderedBagReceiptImage,
+        receivedBagImage: receivedBagImage ?? this.receivedBagImage,
+        originalIndex: originalIndex,
       );
 }
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+int _parseInt(dynamic v) =>
+    v is int ? v : int.tryParse(v?.toString() ?? '') ?? 0;
+
+double _parseDouble(dynamic v) =>
+    v is double ? v : double.tryParse(v?.toString() ?? '') ?? 0.0;

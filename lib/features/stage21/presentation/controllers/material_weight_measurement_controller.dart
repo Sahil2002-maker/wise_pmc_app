@@ -1,6 +1,4 @@
 // lib/features/stage21/presentation/controllers/material_weight_measurement_controller.dart
-//
-// UPDATED: Works with the new MwmFileSlot.existingPhotos list.
 
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -9,9 +7,13 @@ import '../../data/models/material_weight_measurement_model.dart';
 import '../../data/services/mwm_api_service.dart';
 
 enum MwmFileSlotKey {
+  // Steel
   grossWeightSlip,
   vehicleWithMaterialImage,
-  tareWeightSlip
+  tareWeightSlip,
+  // Cement
+  orderedBagReceiptImage,
+  receivedBagImage,
 }
 
 class MaterialWeightMeasurementController extends ChangeNotifier {
@@ -23,7 +25,7 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
     required this.projectName,
   });
 
-  // ── List state ─────────────────────────────────────────────────────────────
+  // ── List ───────────────────────────────────────────────────────────────────
 
   List<MwmListModel> _allRecords = [];
   List<MwmListModel> _filtered = [];
@@ -33,10 +35,10 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
   bool listLoading = false;
   String? listError;
 
-  // ── Form state ─────────────────────────────────────────────────────────────
+  // ── Form ───────────────────────────────────────────────────────────────────
 
   bool formLoading = false;
-  bool formSaving = false;
+  bool formSaving = false; // ← always reset at init
   String? formError;
 
   String? formMwmNo;
@@ -44,11 +46,9 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
   String? formRemarks;
   List<MwmEntryForm> formEntries = [];
 
-  // Material types (shared, loaded once)
   List<MwmMaterialTypeModel> materialTypes = [];
   bool typesLoaded = false;
 
-  // Tracks original indices removed during edit
   final List<int> _removedOriginalIndices = [];
   List<int> get removedOriginalIndices =>
       List.unmodifiable(_removedOriginalIndices);
@@ -94,7 +94,7 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
     }
   }
 
-  // ── Load material types (once) ─────────────────────────────────────────────
+  // ── Material types ─────────────────────────────────────────────────────────
 
   Future<void> ensureMaterialTypes() async {
     if (typesLoaded && materialTypes.isNotEmpty) return;
@@ -105,10 +105,12 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
     } catch (_) {}
   }
 
-  // ── Init create form ───────────────────────────────────────────────────────
+  // ── Init create ────────────────────────────────────────────────────────────
 
   Future<void> initCreateForm() async {
+    // ✅ FIX: Always reset formSaving before entering the form
     formLoading = true;
+    formSaving = false;
     formError = null;
     formMwmNo = null;
     formDate = null;
@@ -130,10 +132,12 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
     }
   }
 
-  // ── Init edit form ─────────────────────────────────────────────────────────
+  // ── Init edit ──────────────────────────────────────────────────────────────
 
   Future<void> initEditForm(int id) async {
+    // ✅ FIX: Always reset formSaving before entering the form
     formLoading = true;
+    formSaving = false;
     formError = null;
     formEntries = [];
     _removedOriginalIndices.clear();
@@ -146,13 +150,12 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
       formDate = data.measurementDateFormatted;
       formRemarks = data.remarks;
       formEntries = data.entries.asMap().entries.map((e) {
-        final entry = e.value;
         MwmMaterialTypeModel? matched;
         try {
           matched =
-              materialTypes.firstWhere((t) => t.id == entry.materialTypeId);
+              materialTypes.firstWhere((t) => t.id == e.value.materialTypeId);
         } catch (_) {}
-        return MwmEntryForm.fromEdit(entry, e.key, matched);
+        return MwmEntryForm.fromEdit(e.value, e.key, matched);
       }).toList();
       if (formEntries.isEmpty) formEntries = [MwmEntryForm()];
     } catch (e) {
@@ -165,8 +168,8 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
 
   // ── Entry management ───────────────────────────────────────────────────────
 
-  void addEntry() {
-    formEntries = [...formEntries, MwmEntryForm()];
+  void addEntry({MwmEntryType type = MwmEntryType.steel}) {
+    formEntries = [...formEntries, MwmEntryForm(entryType: type)];
     notifyListeners();
   }
 
@@ -186,26 +189,21 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── File slot management ───────────────────────────────────────────────────
+  // ── Geo capture ────────────────────────────────────────────────────────────
 
   Future<MwmGeoPoint?> captureGeo() async {
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) return null;
-
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
       if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        return null;
-      }
-
+          permission == LocationPermission.deniedForever) return null;
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.high),
       );
       return MwmGeoPoint(
         lat: position.latitude,
@@ -218,7 +216,8 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
     }
   }
 
-  /// Sets a freshly picked/captured file for the given entry/slot.
+  // ── Set file ───────────────────────────────────────────────────────────────
+
   Future<void> setEntryFile(
     int entryIndex,
     MwmFileSlotKey slotKey,
@@ -235,7 +234,6 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
             newFile: file,
             removed: false,
             geo: geo,
-            // Keep existing photos visible — new file is ADDED on top
             existingPhotos: entry.grossWeightSlip.existingPhotos,
           ),
         );
@@ -260,47 +258,88 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
           ),
         );
         break;
+      case MwmFileSlotKey.orderedBagReceiptImage:
+        updated = entry.copyWith(
+          orderedBagReceiptImage: entry.orderedBagReceiptImage.copyWith(
+            newFile: file,
+            removed: false,
+            geo: geo,
+            existingPhotos: entry.orderedBagReceiptImage.existingPhotos,
+          ),
+        );
+        break;
+      case MwmFileSlotKey.receivedBagImage:
+        updated = entry.copyWith(
+          receivedBagImage: entry.receivedBagImage.copyWith(
+            newFile: file,
+            removed: false,
+            geo: geo,
+            existingPhotos: entry.receivedBagImage.existingPhotos,
+          ),
+        );
+        break;
     }
     updateEntry(entryIndex, updated);
   }
 
-  /// Clears a slot — removes new file and/or marks existing server files for removal.
+  // ── Clear file ─────────────────────────────────────────────────────────────
+
   void clearEntryFile(int entryIndex, MwmFileSlotKey slotKey) {
     final entry = formEntries[entryIndex];
 
     MwmEntryForm updated;
     switch (slotKey) {
       case MwmFileSlotKey.grossWeightSlip:
-        final hadExisting =
-            entry.grossWeightSlip.existingPhotos.isNotEmpty;
+        final had = entry.grossWeightSlip.existingPhotos.isNotEmpty;
         updated = entry.copyWith(
           grossWeightSlip: entry.grossWeightSlip.copyWith(
             clearNewFile: true,
             clearGeo: true,
-            removed: hadExisting,
+            removed: had,
             existingPhotos: const [],
           ),
         );
         break;
       case MwmFileSlotKey.vehicleWithMaterialImage:
-        final hadExisting =
-            entry.vehicleWithMaterialImage.existingPhotos.isNotEmpty;
+        final had = entry.vehicleWithMaterialImage.existingPhotos.isNotEmpty;
         updated = entry.copyWith(
           vehicleWithMaterialImage: entry.vehicleWithMaterialImage.copyWith(
             clearNewFile: true,
             clearGeo: true,
-            removed: hadExisting,
+            removed: had,
             existingPhotos: const [],
           ),
         );
         break;
       case MwmFileSlotKey.tareWeightSlip:
-        final hadExisting = entry.tareWeightSlip.existingPhotos.isNotEmpty;
+        final had = entry.tareWeightSlip.existingPhotos.isNotEmpty;
         updated = entry.copyWith(
           tareWeightSlip: entry.tareWeightSlip.copyWith(
             clearNewFile: true,
             clearGeo: true,
-            removed: hadExisting,
+            removed: had,
+            existingPhotos: const [],
+          ),
+        );
+        break;
+      case MwmFileSlotKey.orderedBagReceiptImage:
+        final had = entry.orderedBagReceiptImage.existingPhotos.isNotEmpty;
+        updated = entry.copyWith(
+          orderedBagReceiptImage: entry.orderedBagReceiptImage.copyWith(
+            clearNewFile: true,
+            clearGeo: true,
+            removed: had,
+            existingPhotos: const [],
+          ),
+        );
+        break;
+      case MwmFileSlotKey.receivedBagImage:
+        final had = entry.receivedBagImage.existingPhotos.isNotEmpty;
+        updated = entry.copyWith(
+          receivedBagImage: entry.receivedBagImage.copyWith(
+            clearNewFile: true,
+            clearGeo: true,
+            removed: had,
             existingPhotos: const [],
           ),
         );
@@ -309,7 +348,7 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
     updateEntry(entryIndex, updated);
   }
 
-  // ── Save (create) ──────────────────────────────────────────────────────────
+  // ── Save create ────────────────────────────────────────────────────────────
 
   Future<bool> saveCreate() async {
     if (!_validateEntries()) return false;
@@ -326,13 +365,15 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
       return true;
     } catch (e) {
       formError = e.toString().replaceAll('Exception: ', '');
+      return false;
+    } finally {
+      // ✅ FIX: Always reset formSaving in finally block
       formSaving = false;
       notifyListeners();
-      return false;
     }
   }
 
-  // ── Save (update) ──────────────────────────────────────────────────────────
+  // ── Save update ────────────────────────────────────────────────────────────
 
   Future<bool> saveUpdate(int id) async {
     if (!_validateEntries()) return false;
@@ -351,9 +392,11 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
       return true;
     } catch (e) {
       formError = e.toString().replaceAll('Exception: ', '');
+      return false;
+    } finally {
+      // ✅ FIX: Always reset formSaving in finally block
       formSaving = false;
       notifyListeners();
-      return false;
     }
   }
 
@@ -366,15 +409,20 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
       _applyFilter();
       notifyListeners();
       return true;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
-  // ── Computed totals for form UI ────────────────────────────────────────────
+  // ── Computed ───────────────────────────────────────────────────────────────
 
-  double get formTotalNet =>
-      formEntries.fold(0.0, (sum, e) => sum + e.netWeight);
+  double get formTotalNet => formEntries
+      .where((e) => e.isSteel)
+      .fold(0.0, (s, e) => s + e.netWeight);
+
+  int get formTotalReceivedBags => formEntries
+      .where((e) => e.isCement)
+      .fold(0, (s, e) => s + e.totalReceivedBags);
 
   // ── Validation ─────────────────────────────────────────────────────────────
 
@@ -387,9 +435,16 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
         notifyListeners();
         return false;
       }
-      if (e.grossWeight <= 0 || e.tareWeight <= 0) {
+      if (e.isSteel && (e.grossWeight <= 0 || e.tareWeight <= 0)) {
         formError =
-            'Please enter valid Loaded and Empty weights for each entry.';
+            'Please enter valid Loaded and Empty weights for steel entries.';
+        notifyListeners();
+        return false;
+      }
+      if (e.isCement &&
+          (e.totalOrderedBags <= 0 || e.totalReceivedBags <= 0)) {
+        formError =
+            'Please enter valid Ordered and Received bag counts for cement entries.';
         notifyListeners();
         return false;
       }

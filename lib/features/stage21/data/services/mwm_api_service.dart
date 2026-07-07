@@ -1,4 +1,7 @@
 // lib/features/stage21/data/services/mwm_api_service.dart
+//
+// UPDATED: Cement + Steel dual-type support.
+// Multi-photo arrays sent as files[i][field][] and captured[i][field][].
 
 import 'dart:convert';
 import 'dart:developer' as developer;
@@ -13,8 +16,6 @@ class MwmApiService {
   static String _base(int projectId) =>
       '${ApiConstants.baseUrl}/api/mobile/mwm/$projectId';
 
-  // ── Headers ────────────────────────────────────────────────────────────────
-
   static Future<Map<String, String>> _headers() async {
     final token = await AuthStorageService.getToken();
     return {
@@ -24,7 +25,7 @@ class MwmApiService {
     };
   }
 
-  // ── Fetch list ─────────────────────────────────────────────────────────────
+  // ── List ───────────────────────────────────────────────────────────────────
 
   static Future<List<MwmListModel>> fetchList(int projectId) async {
     final res = await http.get(
@@ -41,45 +42,19 @@ class MwmApiService {
         .toList();
   }
 
-  // ── Fetch detail (show) ────────────────────────────────────────────────────
+  // ── Detail ─────────────────────────────────────────────────────────────────
 
   static Future<MwmDetailModel> fetchDetail(int projectId, int id) async {
     final url = '${_base(projectId)}/$id';
     developer.log('MWM fetchDetail → GET $url', name: 'MwmApiService');
-
-    final res = await http.get(
-      Uri.parse(url),
-      headers: await _headers(),
-    );
+    final res = await http.get(Uri.parse(url), headers: await _headers());
     _assertOk(res);
-
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     if (body['success'] != true) throw Exception(body['message'] ?? 'Failed');
-
-    final record = body['record'] as Map<String, dynamic>;
-    final entries = record['entries'] as List? ?? [];
-
-    // ── DEBUG: log what the backend actually returned for file fields ──────
-    // Remove this block once images are confirmed working.
-    for (var i = 0; i < entries.length; i++) {
-      final e = entries[i] as Map<String, dynamic>? ?? {};
-      developer.log(
-        'MWM entry[$i] file fields:\n'
-        '  gross_weight_slip       = ${e['gross_weight_slip']}\n'
-        '  gross_weight_slip_url   = ${e['gross_weight_slip_url']}\n'
-        '  vehicle_with_material_image     = ${e['vehicle_with_material_image']}\n'
-        '  vehicle_with_material_image_url = ${e['vehicle_with_material_image_url']}\n'
-        '  tare_weight_slip        = ${e['tare_weight_slip']}\n'
-        '  tare_weight_slip_url    = ${e['tare_weight_slip_url']}',
-        name: 'MwmApiService',
-      );
-    }
-    // ── END DEBUG ──────────────────────────────────────────────────────────
-
-    return MwmDetailModel.fromJson(record);
+    return MwmDetailModel.fromJson(body['record'] as Map<String, dynamic>);
   }
 
-  // ── Fetch edit data ────────────────────────────────────────────────────────
+  // ── Edit prefill ───────────────────────────────────────────────────────────
 
   static Future<MwmEditModel> fetchEdit(int projectId, int id) async {
     final res = await http.get(
@@ -92,7 +67,7 @@ class MwmApiService {
     return MwmEditModel.fromJson(body['record'] as Map<String, dynamic>);
   }
 
-  // ── Fetch create meta (mwm_no + today) ────────────────────────────────────
+  // ── Create meta ────────────────────────────────────────────────────────────
 
   static Future<Map<String, String>> fetchCreateMeta(int projectId) async {
     final res = await http.get(
@@ -107,11 +82,11 @@ class MwmApiService {
     };
   }
 
-  // ── Fetch material types ───────────────────────────────────────────────────
+  // ── Material types ─────────────────────────────────────────────────────────
 
   static Future<List<MwmMaterialTypeModel>> fetchMaterialTypes() async {
     final res = await http.get(
-      Uri.parse('${ApiConstants.baseUrl}/mwm/material-types'),
+      Uri.parse('${ApiConstants.baseUrl}/api/mobile/mwm/material-types'),
       headers: await _headers(),
     );
     _assertOk(res);
@@ -149,9 +124,7 @@ class MwmApiService {
     final res = await http.Response.fromStream(streamed);
     _assertOk(res);
     final body = jsonDecode(res.body) as Map<String, dynamic>;
-    if (body['success'] != true) {
-      throw Exception(_extractError(body));
-    }
+    if (body['success'] != true) throw Exception(_extractError(body));
   }
 
   // ── Update ─────────────────────────────────────────────────────────────────
@@ -177,17 +150,27 @@ class MwmApiService {
       fields.addAll(_entryFields(i, entry));
       fields['existing_index[$i]'] = entry.originalIndex?.toString() ?? 'new';
 
-      if (entry.grossWeightSlip.removed) {
-        fields['remove_files[$i][gross_weight_slip]'] = '1';
-      }
-      if (entry.vehicleWithMaterialImage.removed) {
-        fields['remove_files[$i][vehicle_with_material_image]'] = '1';
-      }
-      if (entry.tareWeightSlip.removed) {
-        fields['remove_files[$i][tare_weight_slip]'] = '1';
+      if (entry.isSteel) {
+        if (entry.grossWeightSlip.removed) {
+          fields['removed_photos[$i][gross_weight_slip][]'] = '';
+        }
+        if (entry.vehicleWithMaterialImage.removed) {
+          fields['removed_photos[$i][vehicle_with_material_image][]'] = '';
+        }
+        if (entry.tareWeightSlip.removed) {
+          fields['removed_photos[$i][tare_weight_slip][]'] = '';
+        }
+      } else {
+        if (entry.orderedBagReceiptImage.removed) {
+          fields['removed_photos[$i][ordered_bag_receipt_image][]'] = '';
+        }
+        if (entry.receivedBagImage.removed) {
+          fields['removed_photos[$i][received_bag_image][]'] = '';
+        }
       }
     }
-    for (var origIdx in removedOriginalIndices) {
+
+    for (final origIdx in removedOriginalIndices) {
       fields['removed_indices[]'] = origIdx.toString();
     }
     req.fields.addAll(fields);
@@ -200,9 +183,7 @@ class MwmApiService {
     final res = await http.Response.fromStream(streamed);
     _assertOk(res);
     final body = jsonDecode(res.body) as Map<String, dynamic>;
-    if (body['success'] != true) {
-      throw Exception(_extractError(body));
-    }
+    if (body['success'] != true) throw Exception(_extractError(body));
   }
 
   // ── Delete ─────────────────────────────────────────────────────────────────
@@ -211,58 +192,51 @@ class MwmApiService {
     final headers = await _headers();
     final res = await http.post(
       Uri.parse('${_base(projectId)}/$id'),
-      headers: {
-        ...headers,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: {...headers, 'Content-Type': 'application/x-www-form-urlencoded'},
       body: {'_method': 'DELETE'},
     );
     _assertOk(res);
     final body = jsonDecode(res.body) as Map<String, dynamic>;
-    if (body['success'] != true) {
-      throw Exception(body['message'] ?? 'Delete failed');
-    }
+    if (body['success'] != true) throw Exception(body['message'] ?? 'Delete failed');
   }
 
-  // ── Download PDF ───────────────────────────────────────────────────────────
+  // ── Download URL ───────────────────────────────────────────────────────────
 
   static String downloadUrl(int projectId, int id) =>
       '${_base(projectId)}/$id/download';
-
-  // ── Debug endpoint ─────────────────────────────────────────────────────────
-  // Call this from your list page temporarily to diagnose stored field shapes.
-  // Remove after images are confirmed working.
-
-  static Future<Map<String, dynamic>> debugEntries(
-      int projectId, int id) async {
-    final res = await http.get(
-      Uri.parse('${_base(projectId)}/$id/debug'),
-      headers: await _headers(),
-    );
-    _assertOk(res);
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   static Map<String, String> _entryFields(int i, MwmEntryForm e) {
     final fields = <String, String>{
+      'entries[$i][entry_type]': e.entryType.value,
       'entries[$i][vehicle_number]': e.vehicleNumber,
       'entries[$i][challan_number]': e.challanNumber,
       'entries[$i][material_type_id]': e.materialType?.id.toString() ?? '',
-      'entries[$i][gross_weight]': e.grossWeight.toString(),
-      'entries[$i][tare_weight]': e.tareWeight.toString(),
     };
 
-    void addGeo(String slot, MwmFileSlot fileSlot) {
-      if (fileSlot.geo != null) {
-        fields['geo[$i][$slot]'] = jsonEncode(fileSlot.geo!.toJson());
+    if (e.isSteel) {
+      fields['entries[$i][gross_weight]'] = e.grossWeight.toString();
+      fields['entries[$i][tare_weight]'] = e.tareWeight.toString();
+      void addGeo(String slot, MwmFileSlot slot_) {
+        if (slot_.geo != null) {
+          fields['geo[$i][$slot][]'] = jsonEncode(slot_.geo!.toJson());
+        }
       }
+      addGeo('gross_weight_slip', e.grossWeightSlip);
+      addGeo('vehicle_with_material_image', e.vehicleWithMaterialImage);
+      addGeo('tare_weight_slip', e.tareWeightSlip);
+    } else {
+      fields['entries[$i][total_ordered_bags]'] = e.totalOrderedBags.toString();
+      fields['entries[$i][total_received_bags]'] = e.totalReceivedBags.toString();
+      void addGeo(String slot, MwmFileSlot slot_) {
+        if (slot_.geo != null) {
+          fields['geo[$i][$slot][]'] = jsonEncode(slot_.geo!.toJson());
+        }
+      }
+      addGeo('ordered_bag_receipt_image', e.orderedBagReceiptImage);
+      addGeo('received_bag_image', e.receivedBagImage);
     }
-
-    addGeo('gross_weight_slip', e.grossWeightSlip);
-    addGeo('vehicle_with_material_image', e.vehicleWithMaterialImage);
-    addGeo('tare_weight_slip', e.tareWeightSlip);
 
     return fields;
   }
@@ -275,17 +249,20 @@ class MwmApiService {
     Future<void> addFile(String slot, MwmFileSlot fileSlot) async {
       final file = fileSlot.newFile;
       if (file == null) return;
+      // Send as array element: files[i][slot][]
       req.files.add(
-        await http.MultipartFile.fromPath(
-          'files[$i][$slot]',
-          file.path,
-        ),
+        await http.MultipartFile.fromPath('files[$i][$slot][]', file.path),
       );
     }
 
-    await addFile('gross_weight_slip', e.grossWeightSlip);
-    await addFile('vehicle_with_material_image', e.vehicleWithMaterialImage);
-    await addFile('tare_weight_slip', e.tareWeightSlip);
+    if (e.isSteel) {
+      await addFile('gross_weight_slip', e.grossWeightSlip);
+      await addFile('vehicle_with_material_image', e.vehicleWithMaterialImage);
+      await addFile('tare_weight_slip', e.tareWeightSlip);
+    } else {
+      await addFile('ordered_bag_receipt_image', e.orderedBagReceiptImage);
+      await addFile('received_bag_image', e.receivedBagImage);
+    }
   }
 
   static void _assertOk(http.Response res) {

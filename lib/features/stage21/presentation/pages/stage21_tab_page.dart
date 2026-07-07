@@ -1,12 +1,17 @@
 // lib/features/stage21/presentation/pages/stage21_tab_page.dart
 //
 // Stage 2.1 sub-tabs: DPR | Stock | Quotation | MWM
-// The MWM tab is added as the 4th sub-tab following the same pattern.
+//
+// FIXES applied:
+//  1. Removed unused import '../../data/models/material_stock_model.dart'
+//  2. Removed duplicate/conflicting import of 'dpr_list_page.dart' that was
+//     causing "method 'DprListPage' isn't defined" — the import IS kept but
+//     must match the actual file path exactly.
+//  3. Unnecessary type check (`raw is List` is always true) guarded properly.
 
 import 'package:flutter/material.dart';
 
 import '../../data/models/material_quotation_model.dart';
-import '../../data/models/material_stock_model.dart';
 import '../../data/services/dpr_api_service.dart';
 import '../../data/services/mwm_api_service.dart';
 import '../../data/services/stage21_api_service.dart';
@@ -17,10 +22,10 @@ import 'material_weight_measurement_list_page.dart';
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 
-const _kDprColor   = Color(0xFF7C3AED); // purple
-const _kStockColor = Color(0xFF2563EB); // blue
-const _kQuoteColor = Color(0xFF7C3AED); // purple
-const _kMwmColor   = Color(0xFF059669); // teal-green — distinct MWM accent
+const _kDprColor   = Color(0xFF7C3AED);
+const _kStockColor = Color(0xFF2563EB);
+const _kQuoteColor = Color(0xFF7C3AED);
+const _kMwmColor   = Color(0xFF059669);
 
 // ─── Stage21TabPage ───────────────────────────────────────────────────────────
 
@@ -28,7 +33,6 @@ class Stage21TabPage extends StatefulWidget {
   final int    projectId;
   final String projectName;
 
-  /// Callback fired after counts load so the parent can update its badge count.
   final void Function(int totalCount)? onCountChanged;
 
   const Stage21TabPage({
@@ -46,7 +50,6 @@ class _Stage21TabPageState extends State<Stage21TabPage>
     with SingleTickerProviderStateMixin {
   late TabController _subTabCtrl;
 
-  // ── Lightweight counts (tab badges only — content is rendered by embedded pages)
   int _dprCount   = 0;
   int _stockCount = 0;
   int _quoteCount = 0;
@@ -66,9 +69,7 @@ class _Stage21TabPageState extends State<Stage21TabPage>
     super.dispose();
   }
 
-  void _onSubTabChanged() {
-    setState(() {}); // refresh badge highlighting
-  }
+  void _onSubTabChanged() => setState(() {});
 
   // ── Count loaders ──────────────────────────────────────────────────────────
 
@@ -92,17 +93,40 @@ class _Stage21TabPageState extends State<Stage21TabPage>
 
   Future<void> _loadStockCount() async {
     try {
-      final raw  = await Stage21ApiService.fetchMaterialStocks(projectId: widget.projectId);
-      final list = _extractList<MaterialStockModel>(raw, MaterialStockModel.fromJson);
-      if (mounted) setState(() => _stockCount = list.length);
+      final raw = await Stage21ApiService.fetchMaterialStocks(
+        projectId: widget.projectId,
+        page: 1,
+      );
+
+      int count = 0;
+      if (raw is Map<String, dynamic>) {
+        final outer = raw['data'];
+        if (outer is Map<String, dynamic>) {
+          final total = outer['total'];
+          if (total != null) {
+            count = int.tryParse(total.toString()) ?? 0;
+          } else {
+            final inner = outer['data'];
+            if (inner is List) count = inner.length;
+          }
+        } else if (outer is List) {
+          count = outer.length;
+        }
+      } else if (raw is List) {
+        count = (raw as List).length;
+      }
+
+      if (mounted) setState(() => _stockCount = count);
     } catch (_) {}
     _notifyCount();
   }
 
   Future<void> _loadQuoteCount() async {
     try {
-      final raw  = await Stage21ApiService.fetchMaterialQuotations(projectId: widget.projectId);
-      final list = _extractList<MaterialQuotationModel>(raw, MaterialQuotationModel.fromJson);
+      final raw  = await Stage21ApiService.fetchMaterialQuotations(
+          projectId: widget.projectId);
+      final list = _extractList<MaterialQuotationModel>(
+          raw, MaterialQuotationModel.fromJson);
       if (mounted) setState(() => _quoteCount = list.length);
     } catch (_) {}
     _notifyCount();
@@ -128,9 +152,18 @@ class _Stage21TabPageState extends State<Stage21TabPage>
       return raw.whereType<Map<String, dynamic>>().map(fromJson).toList();
     }
     if (raw is Map<String, dynamic>) {
-      final data = raw['data'];
-      if (data is List) {
-        return data.whereType<Map<String, dynamic>>().map(fromJson).toList();
+      final outer = raw['data'];
+      if (outer is List) {
+        return outer.whereType<Map<String, dynamic>>().map(fromJson).toList();
+      }
+      if (outer is Map<String, dynamic>) {
+        final inner = outer['data'];
+        if (inner is List) {
+          return inner
+              .whereType<Map<String, dynamic>>()
+              .map(fromJson)
+              .toList();
+        }
       }
     }
     return [];
@@ -141,7 +174,6 @@ class _Stage21TabPageState extends State<Stage21TabPage>
   @override
   Widget build(BuildContext context) {
     return Column(children: [
-      // ── Sub-tab bar ──────────────────────────────────────────────────────
       Material(
         color: Colors.white,
         child: TabBar(
@@ -157,15 +189,13 @@ class _Stage21TabPageState extends State<Stage21TabPage>
           unselectedLabelStyle: const TextStyle(
               fontWeight: FontWeight.w500, fontSize: 12),
           tabs: [
-            _subTab('DPR',      _dprCount,   0, _kDprColor),
-            _subTab('Stock',    _stockCount, 1, _kStockColor),
-            _subTab('Quotation',_quoteCount, 2, _kQuoteColor),
-            _subTab('MWM',      _mwmCount,   3, _kMwmColor),
+            _subTab('DPR',       _dprCount,   0, _kDprColor),
+            _subTab('Stock',     _stockCount, 1, _kStockColor),
+            _subTab('Quotation', _quoteCount, 2, _kQuoteColor),
+            _subTab('MWM',       _mwmCount,   3, _kMwmColor),
           ],
         ),
       ),
-
-      // ── Sub-tab views ────────────────────────────────────────────────────
       Expanded(
         child: TabBarView(
           controller: _subTabCtrl,
@@ -182,7 +212,6 @@ class _Stage21TabPageState extends State<Stage21TabPage>
               projectId:   widget.projectId,
               projectName: widget.projectName,
             ),
-            // ── NEW: Material Weight Measurement tab ─────────────────────
             MaterialWeightMeasurementListPage(
               projectId:   widget.projectId,
               projectName: widget.projectName,
