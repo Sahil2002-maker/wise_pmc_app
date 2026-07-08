@@ -63,20 +63,24 @@ class _LaborRowCtrl {
 }
 
 class _ProgressRowCtrl {
-  final TextEditingController activity    = TextEditingController();
-  final TextEditingController plannedPct  = TextEditingController();
-  final TextEditingController actualPct   = TextEditingController();
-  final TextEditingController plannedCum  = TextEditingController();
-  final TextEditingController actualCum   = TextEditingController();
-  final TextEditingController remarks     = TextEditingController();
+  final TextEditingController activity     = TextEditingController();
+  final TextEditingController plannedPct   = TextEditingController();
+  final TextEditingController actualPct    = TextEditingController();
+  final TextEditingController plannedCum   = TextEditingController();
+  final TextEditingController actualCum    = TextEditingController();
+  // NEW: "Material Used" column — present in the web form
+  // (progress_previous[i][material_used]) but previously missing here.
+  final TextEditingController materialUsed = TextEditingController();
+  final TextEditingController remarks      = TextEditingController();
 
   void fill(ProgressPreviousRow r) {
-    activity.text   = r.activity ?? '';
-    plannedPct.text = _fmt(r.plannedPct);
-    actualPct.text  = _fmt(r.actualPct);
-    plannedCum.text = _fmt(r.plannedCumulative);
-    actualCum.text  = _fmt(r.actualCumulative);
-    remarks.text    = r.remarks ?? '';
+    activity.text     = r.activity ?? '';
+    plannedPct.text   = _fmt(r.plannedPct);
+    actualPct.text    = _fmt(r.actualPct);
+    plannedCum.text   = _fmt(r.plannedCumulative);
+    actualCum.text    = _fmt(r.actualCumulative);
+    materialUsed.text = r.materialUsed ?? '';
+    remarks.text      = r.remarks ?? '';
   }
 
   static String _fmt(double v) => v == 0 ? '' : (v == v.truncateToDouble()
@@ -88,12 +92,14 @@ class _ProgressRowCtrl {
         'actual_pct':         double.tryParse(actualPct.text.trim()) ?? 0,
         'planned_cumulative': double.tryParse(plannedCum.text.trim()) ?? 0,
         'actual_cumulative':  double.tryParse(actualCum.text.trim()) ?? 0,
+        'material_used':      materialUsed.text.trim(),
         'remarks':            remarks.text.trim(),
       };
 
   void dispose() {
     activity.dispose(); plannedPct.dispose(); actualPct.dispose();
-    plannedCum.dispose(); actualCum.dispose(); remarks.dispose();
+    plannedCum.dispose(); actualCum.dispose(); materialUsed.dispose();
+    remarks.dispose();
   }
 }
 
@@ -145,7 +151,18 @@ class _DprFormPageState extends State<DprFormPage> {
   final _formKey = GlobalKey<FormState>();
 
   // ── Controllers ───────────────────────────────────────────────────────────
+  // NOTE on dates: the *Ctrl controllers hold the DD/MM/YYYY text shown to
+  // the user (matching the web UI's display format). The matching *Raw
+  // strings hold the underlying YYYY-MM-DD value that is actually sent to
+  // the API. Always update both together via _setDateValue()/_pickDateInto().
   final TextEditingController _reportDateCtrl    = TextEditingController();
+  String _reportDateRaw = '';
+  // NEW: independent date pickers for Section A / Section B, mirroring the
+  // web form's per-section "Date:" fields next to the section headings.
+  final TextEditingController _laborReportDateCtrl      = TextEditingController();
+  String _laborReportDateRaw = '';
+  final TextEditingController _progressPreviousDateCtrl = TextEditingController();
+  String _progressPreviousDateRaw = '';
   final TextEditingController _decisionsCtrl     = TextEditingController();
   final TextEditingController _bottleNecksCtrl   = TextEditingController();
   final TextEditingController _changeAuthCtrl    = TextEditingController();
@@ -175,14 +192,21 @@ class _DprFormPageState extends State<DprFormPage> {
   @override
   void initState() {
     super.initState();
-    _reportDateCtrl.text =
-        DateFormat('yyyy-MM-dd').format(DateTime.now());
+    _setDateValue(_reportDateCtrl,
+        (r) => _reportDateRaw = r, DateFormat('yyyy-MM-dd').format(DateTime.now()));
     _initDefaults();
     if (widget.isEdit) {
       _loadForEdit();
     } else {
       _fetchNextReportNo();
       _addDefaultRows();
+      // Default Section A date to the report date, and Section B date to
+      // the day before — both remain independently editable afterwards,
+      // exactly like the web form's initial pre-fill behaviour.
+      _setDateValue(_laborReportDateCtrl,
+          (r) => _laborReportDateRaw = r, _reportDateRaw);
+      _setDateValue(_progressPreviousDateCtrl,
+          (r) => _progressPreviousDateRaw = r, _computePrevDayDate(_reportDateRaw));
     }
   }
 
@@ -194,6 +218,39 @@ class _DprFormPageState extends State<DprFormPage> {
   }
 
   void _addDefaultRows() {}   // already done in _initDefaults
+
+  // ── Previous day date helper ────────────────────────────────────────────
+  // Used only to pre-fill the Section B date picker with a sensible
+  // default (Report Date minus 1 day) — the field itself stays editable.
+  // Takes/returns a raw YYYY-MM-DD string.
+  String _computePrevDayDate(String rawDateStr) {
+    if (rawDateStr.isEmpty) return '';
+    try {
+      final d = DateTime.parse(rawDateStr).subtract(const Duration(days: 1));
+      return DateFormat('yyyy-MM-dd').format(d);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  // ── Date display helpers ──────────────────────────────────────────────
+  // The UI shows dates as DD/MM/YYYY (matching the web app) while the raw
+  // YYYY-MM-DD value — what the API actually expects — is tracked
+  // separately via the *Raw fields above.
+  String _formatDisplayDate(String rawDateStr) {
+    if (rawDateStr.isEmpty) return '';
+    try {
+      return DateFormat('dd/MM/yyyy').format(DateTime.parse(rawDateStr));
+    } catch (_) {
+      return rawDateStr;
+    }
+  }
+
+  void _setDateValue(TextEditingController displayCtrl,
+      void Function(String raw) setRaw, String rawDateStr) {
+    setRaw(rawDateStr);
+    displayCtrl.text = _formatDisplayDate(rawDateStr);
+  }
 
   Future<void> _fetchNextReportNo() async {
     try {
@@ -221,7 +278,8 @@ class _DprFormPageState extends State<DprFormPage> {
       _worksRows.clear();
 
       _reportNo = detail.reportNo;
-      _reportDateCtrl.text = detail.reportDateRaw ?? '';
+      _setDateValue(_reportDateCtrl,
+          (r) => _reportDateRaw = r, detail.reportDateRaw ?? '');
       _weatherValue = detail.weather;
       _decisionsCtrl.text   = detail.decisionsApprovals ?? '';
       _bottleNecksCtrl.text = detail.bottleNecks ?? '';
@@ -229,6 +287,20 @@ class _DprFormPageState extends State<DprFormPage> {
       _materialCtrl.text    = detail.materialDelivered ?? '';
       _ehsCtrl.text         = detail.ehsIncidentReports ?? '';
       _existingPhotos       = detail.photoUrls;
+
+      // Section A / Section B dates — fall back sensibly if the backend
+      // hasn't set them yet (older records created before this field existed).
+      _setDateValue(
+        _laborReportDateCtrl,
+        (r) => _laborReportDateRaw = r,
+        detail.laborReportDateRaw ?? detail.reportDateRaw ?? '',
+      );
+      _setDateValue(
+        _progressPreviousDateCtrl,
+        (r) => _progressPreviousDateRaw = r,
+        detail.progressPreviousDateRaw ??
+            _computePrevDayDate(detail.reportDateRaw ?? ''),
+      );
 
       if (detail.laborReport.isEmpty) {
         _laborRows.add(_LaborRowCtrl());
@@ -269,6 +341,8 @@ class _DprFormPageState extends State<DprFormPage> {
   @override
   void dispose() {
     _reportDateCtrl.dispose();
+    _laborReportDateCtrl.dispose();
+    _progressPreviousDateCtrl.dispose();
     _decisionsCtrl.dispose();
     _bottleNecksCtrl.dispose();
     _changeAuthCtrl.dispose();
@@ -280,13 +354,17 @@ class _DprFormPageState extends State<DprFormPage> {
     super.dispose();
   }
 
-  // ── Date picker ───────────────────────────────────────────────────────────
+  // ── Date pickers ──────────────────────────────────────────────────────────
+  // Shows the native date picker, then stores the result as YYYY-MM-DD in
+  // the raw field (for the API) and DD/MM/YYYY in the display controller
+  // (for the UI) — see _setDateValue().
 
-  Future<void> _pickDate() async {
+  Future<void> _pickDateInto(TextEditingController displayCtrl,
+      String currentRaw, void Function(String raw) setRaw) async {
     DateTime initial = DateTime.now();
     try {
-      if (_reportDateCtrl.text.isNotEmpty) {
-        initial = DateTime.parse(_reportDateCtrl.text);
+      if (currentRaw.isNotEmpty) {
+        initial = DateTime.parse(currentRaw);
       }
     } catch (_) {}
 
@@ -308,10 +386,17 @@ class _DprFormPageState extends State<DprFormPage> {
 
     if (picked != null && mounted) {
       setState(() {
-        _reportDateCtrl.text = DateFormat('yyyy-MM-dd').format(picked);
+        _setDateValue(displayCtrl, setRaw, DateFormat('yyyy-MM-dd').format(picked));
       });
     }
   }
+
+  Future<void> _pickDate() => _pickDateInto(
+      _reportDateCtrl, _reportDateRaw, (r) => _reportDateRaw = r);
+  Future<void> _pickLaborDate() => _pickDateInto(_laborReportDateCtrl,
+      _laborReportDateRaw, (r) => _laborReportDateRaw = r);
+  Future<void> _pickProgressDate() => _pickDateInto(_progressPreviousDateCtrl,
+      _progressPreviousDateRaw, (r) => _progressPreviousDateRaw = r);
 
   // ── Photo picker ──────────────────────────────────────────────────────────
 
@@ -346,7 +431,7 @@ class _DprFormPageState extends State<DprFormPage> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (_reportDateCtrl.text.isEmpty) {
+    if (_reportDateRaw.isEmpty) {
       _showSnackBar('Please select a report date.', error: true);
       return;
     }
@@ -362,7 +447,9 @@ class _DprFormPageState extends State<DprFormPage> {
         await DprApiService.updateReport(
           projectId:            widget.projectId,
           id:                   widget.editId!,
-          reportDate:           _reportDateCtrl.text,
+          reportDate:           _reportDateRaw,
+          laborReportDate:      _laborReportDateRaw,
+          progressPreviousDate: _progressPreviousDateRaw,
           weather:              _weatherValue,
           laborReport:          laborData,
           progressPrevious:     progressData,
@@ -382,7 +469,9 @@ class _DprFormPageState extends State<DprFormPage> {
       } else {
         await DprApiService.createReport(
           projectId:            widget.projectId,
-          reportDate:           _reportDateCtrl.text,
+          reportDate:           _reportDateRaw,
+          laborReportDate:      _laborReportDateRaw,
+          progressPreviousDate: _progressPreviousDateRaw,
           weather:              _weatherValue,
           laborReport:          laborData,
           progressPrevious:     progressData,
@@ -536,7 +625,13 @@ class _DprFormPageState extends State<DprFormPage> {
             const SizedBox(height: 16),
 
             // ── Section A: Labor ──────────────────────────────────────────
-            _SectionLabel(label: 'A. Detailed Labor Report'),
+            _SectionLabel(
+              label: 'A. Detailed Labor Report',
+              trailing: _CompactDateField(
+                controller: _laborReportDateCtrl,
+                onTap: _pickLaborDate,
+              ),
+            ),
             _DynamicTable<_LaborRowCtrl>(
               rows:    _laborRows,
               onAdd:   () => setState(() => _laborRows.add(_LaborRowCtrl())),
@@ -565,7 +660,13 @@ class _DprFormPageState extends State<DprFormPage> {
             const SizedBox(height: 16),
 
             // ── Section B: Progress Previous ──────────────────────────────
-            _SectionLabel(label: 'B. Progress Achieved on Previous Day'),
+            _SectionLabel(
+              label: 'B. Progress Achieved on Previous Day',
+              trailing: _CompactDateField(
+                controller: _progressPreviousDateCtrl,
+                onTap: _pickProgressDate,
+              ),
+            ),
             _DynamicTable<_ProgressRowCtrl>(
               rows:    _progressRows,
               onAdd:   () => setState(
@@ -582,6 +683,7 @@ class _DprFormPageState extends State<DprFormPage> {
                   _ColHead(label: 'Act %', width: 70),
                   _ColHead(label: 'Plan Cum', width: 80),
                   _ColHead(label: 'Act Cum', width: 80),
+                  _ColHead(label: 'Material Used', width: 120),
                   _ColHead(label: 'Remarks', width: 120),
                   _ColHead(label: '', width: 36),
                 ]),
@@ -661,7 +763,7 @@ class _DprFormPageState extends State<DprFormPage> {
             const SizedBox(height: 16),
 
             // ── Photos ────────────────────────────────────────────────────
-            _SectionLabel(label: 'Progress Photos'),
+            _SectionLabel(label: 'Previous Date Progress Photos'),
             _FormCard(
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -983,7 +1085,8 @@ class _ProgressRowWidget extends StatelessWidget {
           _numCell(c.actualPct,  width: 70),
           _numCell(c.plannedCum, width: 80),
           _numCell(c.actualCum,  width: 80),
-          _cell(c.remarks,    width: 120, hint: 'Remarks'),
+          _cell(c.materialUsed, width: 120, hint: 'Material Used'),
+          _cell(c.remarks,    width: 120, hint: 'Remarks / Delay reason'),
           _removeBtn(onRemove),
         ]),
       ),
@@ -1134,10 +1237,14 @@ class _FormCard extends StatelessWidget {
 }
 
 // ─── Section label ────────────────────────────────────────────────────────────
-
+//
+// NEW: optional `trailing` widget so Section A / Section B (Previous Day)
+// can show their own compact "Date:" picker on the right, mirroring the
+// web's `dpr-section-heading d-flex justify-content-between` layout.
 class _SectionLabel extends StatelessWidget {
   final String label;
-  const _SectionLabel({required this.label});
+  final Widget? trailing;
+  const _SectionLabel({required this.label, this.trailing});
 
   @override
   Widget build(BuildContext context) {
@@ -1160,7 +1267,53 @@ class _SectionLabel extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                   color: Color(0xFF1E293B))),
         ),
+        if (trailing != null) ...[
+          const SizedBox(width: 8),
+          trailing!,
+        ],
       ]),
+    );
+  }
+}
+
+// ─── Compact inline date field (used in _SectionLabel's trailing slot) ───────
+
+class _CompactDateField extends StatelessWidget {
+  final TextEditingController controller;
+  final VoidCallback onTap;
+  const _CompactDateField({required this.controller, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 128,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.calendar_today_rounded,
+              size: 12, color: Color(0xFF7C3AED)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: AnimatedBuilder(
+              animation: controller,
+              builder: (_, __) => Text(
+                controller.text.isEmpty ? 'Select' : controller.text,
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1E293B)),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }

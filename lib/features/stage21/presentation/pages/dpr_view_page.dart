@@ -133,7 +133,12 @@ class _DprViewPageState extends State<DprViewPage> {
         const SizedBox(height: 16),
 
         // ── Section A: Labor Report ───────────────────────────────────────
-        _SectionHeading(label: 'A. Detailed Labor Report'),
+        // NEW: shows the independently-editable Section A date, matching
+        // the web view modal's "(dd/mm/yyyy)" suffix next to the heading.
+        _SectionHeading(
+          label: 'A. Detailed Labor Report',
+          dateLabel: r.laborReportDate,
+        ),
         _SectionCard(
           padding: EdgeInsets.zero,
           child: r.laborReport.isEmpty
@@ -188,7 +193,11 @@ class _DprViewPageState extends State<DprViewPage> {
         const SizedBox(height: 16),
 
         // ── Section B: Progress Previous ──────────────────────────────────
-        _SectionHeading(label: 'B. Progress Achieved on Previous Day'),
+        // NEW: shows the independently-editable Section B date.
+        _SectionHeading(
+          label: 'B. Progress Achieved on Previous Day',
+          dateLabel: r.progressPreviousDate,
+        ),
         _SectionCard(
           padding: EdgeInsets.zero,
           child: r.progressPrevious.isEmpty
@@ -211,6 +220,7 @@ class _DprViewPageState extends State<DprViewPage> {
                       DataColumn(label: Text('Actual %'), numeric: true),
                       DataColumn(label: Text('Planned\nCumul.'), numeric: true),
                       DataColumn(label: Text('Actual\nCumul.'), numeric: true),
+                      DataColumn(label: Text('Material Used')),
                       DataColumn(label: Text('Remarks')),
                     ],
                     rows: r.progressPrevious
@@ -221,6 +231,7 @@ class _DprViewPageState extends State<DprViewPage> {
                             DataCell(Text('${_fmt(p.actualPct)}%')),
                             DataCell(Text(_fmt(p.plannedCumulative))),
                             DataCell(Text(_fmt(p.actualCumulative))),
+                            DataCell(Text(p.materialUsed ?? '—')),
                             DataCell(Text(p.remarks ?? '')),
                           ]),
                         )
@@ -284,7 +295,7 @@ class _DprViewPageState extends State<DprViewPage> {
             value: r.ehsIncidentReports),
 
         // ── Photos ────────────────────────────────────────────────────────
-        _SectionHeading(label: 'Progress Photos'),
+        _SectionHeading(label: 'Previous Date Progress Photos'),
         _SectionCard(
           child: r.photoUrls.isEmpty
               ? const _EmptySection(label: 'No photos uploaded.')
@@ -335,7 +346,10 @@ class _SectionCard extends StatelessWidget {
 
 class _SectionHeading extends StatelessWidget {
   final String label;
-  const _SectionHeading({required this.label});
+  // NEW: optional date shown in parentheses next to the heading, mirroring
+  // the web view modal's Section A / Section B date suffix.
+  final String? dateLabel;
+  const _SectionHeading({required this.label, this.dateLabel});
 
   @override
   Widget build(BuildContext context) {
@@ -351,11 +365,25 @@ class _SectionHeading extends StatelessWidget {
             )),
         const SizedBox(width: 8),
         Expanded(
-          child: Text(label,
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF1E293B))),
+          child: Text.rich(
+            TextSpan(children: [
+              TextSpan(
+                text: label,
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF1E293B)),
+              ),
+              if (dateLabel != null && dateLabel!.isNotEmpty)
+                TextSpan(
+                  text: '  ($dateLabel)',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF64748B)),
+                ),
+            ]),
+          ),
         ),
       ]),
     );

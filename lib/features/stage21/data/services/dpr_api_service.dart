@@ -179,6 +179,12 @@ class DprApiService {
   static Future<DailyProjectReportSummary> createReport({
     required int projectId,
     required String reportDate,
+    // NEW: independent dates for Section A / Section B, mirroring the web
+    // form's per-section date pickers. Both are optional — when omitted the
+    // backend defaults them (labor date → report date, progress date →
+    // report date minus 1 day).
+    String? laborReportDate,
+    String? progressPreviousDate,
     String? weather,
     required List<Map<String, dynamic>> laborReport,
     required List<Map<String, dynamic>> progressPrevious,
@@ -201,6 +207,12 @@ class DprApiService {
         ..fields['progress_previous'] = jsonEncode(progressPrevious)
         ..fields['works_planned'] = jsonEncode(worksPlanned);
 
+      if (laborReportDate != null && laborReportDate.isNotEmpty) {
+        request.fields['labor_report_date'] = laborReportDate;
+      }
+      if (progressPreviousDate != null && progressPreviousDate.isNotEmpty) {
+        request.fields['progress_previous_date'] = progressPreviousDate;
+      }
       if (weather != null && weather.isNotEmpty) {
         request.fields['weather'] = weather;
       }
@@ -261,6 +273,9 @@ class DprApiService {
     required int projectId,
     required int id,
     required String reportDate,
+    // NEW — see createReport() above.
+    String? laborReportDate,
+    String? progressPreviousDate,
     String? weather,
     required List<Map<String, dynamic>> laborReport,
     required List<Map<String, dynamic>> progressPrevious,
@@ -285,6 +300,12 @@ class DprApiService {
         ..fields['progress_previous'] = jsonEncode(progressPrevious)
         ..fields['works_planned']     = jsonEncode(worksPlanned);
 
+      if (laborReportDate != null && laborReportDate.isNotEmpty) {
+        request.fields['labor_report_date'] = laborReportDate;
+      }
+      if (progressPreviousDate != null && progressPreviousDate.isNotEmpty) {
+        request.fields['progress_previous_date'] = progressPreviousDate;
+      }
       if (weather != null && weather.isNotEmpty) {
         request.fields['weather'] = weather;
       }

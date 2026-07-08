@@ -62,6 +62,7 @@ class ProgressPreviousRow {
   final double actualPct;
   final double plannedCumulative;
   final double actualCumulative;
+  final String? materialUsed;
   final String? remarks;
 
   const ProgressPreviousRow({
@@ -70,6 +71,7 @@ class ProgressPreviousRow {
     this.actualPct = 0,
     this.plannedCumulative = 0,
     this.actualCumulative = 0,
+    this.materialUsed,
     this.remarks,
   });
 
@@ -82,6 +84,7 @@ class ProgressPreviousRow {
       actualPct:          _d('actual_pct'),
       plannedCumulative:  _d('planned_cumulative'),
       actualCumulative:   _d('actual_cumulative'),
+      materialUsed:       json['material_used']?.toString(),
       remarks:            json['remarks']?.toString(),
     );
   }
@@ -92,6 +95,7 @@ class ProgressPreviousRow {
         'actual_pct':         actualPct,
         'planned_cumulative': plannedCumulative,
         'actual_cumulative':  actualCumulative,
+        'material_used':      materialUsed ?? '',
         'remarks':            remarks ?? '',
       };
 }
@@ -220,6 +224,17 @@ class DailyProjectReportDetail {
   final String? reportDate;
   final String? reportDateRaw;
   final String? weather;
+
+  // ── NEW: Section A / Section B editable dates ──────────────────────────
+  // labor_report_date  → shown next to "A. Detailed Labor Report" heading
+  // progress_previous_date → shown next to "B. Progress Achieved on
+  //   Previous Day" heading. Both are independently editable on the web
+  // and default to report_date / (report_date - 1 day) respectively.
+  final String? laborReportDate;
+  final String? laborReportDateRaw;
+  final String? progressPreviousDate;
+  final String? progressPreviousDateRaw;
+
   final List<LaborReportRow> laborReport;
   final List<ProgressPreviousRow> progressPrevious;
   final List<WorksPlannedRow> worksPlanned;
@@ -239,6 +254,10 @@ class DailyProjectReportDetail {
     this.reportDate,
     this.reportDateRaw,
     this.weather,
+    this.laborReportDate,
+    this.laborReportDateRaw,
+    this.progressPreviousDate,
+    this.progressPreviousDateRaw,
     this.laborReport = const [],
     this.progressPrevious = const [],
     this.worksPlanned = const [],
@@ -276,6 +295,10 @@ class DailyProjectReportDetail {
       reportDate:            json['report_date']?.toString(),
       reportDateRaw:         json['report_date_raw']?.toString(),
       weather:               json['weather']?.toString(),
+      laborReportDate:        json['labor_report_date']?.toString(),
+      laborReportDateRaw:     json['labor_report_date_raw']?.toString(),
+      progressPreviousDate:   json['progress_previous_date']?.toString(),
+      progressPreviousDateRaw:json['progress_previous_date_raw']?.toString(),
       laborReport:           _parseList(json['labor_report'],      LaborReportRow.fromJson),
       progressPrevious:      _parseList(json['progress_previous'], ProgressPreviousRow.fromJson),
       worksPlanned:          _parseList(json['works_planned'],     WorksPlannedRow.fromJson),
