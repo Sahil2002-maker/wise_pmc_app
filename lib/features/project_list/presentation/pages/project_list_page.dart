@@ -20,6 +20,15 @@ Future<bool> _isTeamLeader() async {
   return role == 'teamleader' || role == 'team leader' || role == 'leader';
 }
 
+// FIX: Edit-button visibility is NO LONGER derived from a local role check.
+// The backend already exposes the correct permission via `can_edit_project`
+// in the /projects/list response (admin OR the one named exception, user id
+// 182 / Shubham Patil — see MobileProjectListController::userCanEditProject).
+// A locally-computed `_isAdmin()` can never know about that named exception,
+// which is exactly why Shubham never saw the Edit button even though the
+// backend was already granting him access. The old helper is intentionally
+// removed so nobody re-introduces the same bug later.
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 class ProjectListPage extends StatefulWidget {
@@ -39,6 +48,9 @@ class _ProjectListPageState extends State<ProjectListPage>
   String? errorMessage;
   bool canAddProject = false;
   bool isTeamLeader = false;
+  // FIX: this now comes straight from the API's `can_edit_project` flag
+  // (set in loadProjects()) instead of a locally-computed admin check.
+  bool canEditProject = false;
   int currentTabIndex = 0;
 
   @override
@@ -53,8 +65,13 @@ class _ProjectListPageState extends State<ProjectListPage>
   }
 
   Future<void> _init() async {
+    // FIX: only the team-leader flag is resolved locally now (it drives the
+    // "Assign" button, which is a genuine role-based feature). Edit-button
+    // visibility comes from the server response in loadProjects().
     final leaderFlag = await _isTeamLeader();
-    setState(() => isTeamLeader = leaderFlag);
+    setState(() {
+      isTeamLeader = leaderFlag;
+    });
     await loadProjects();
   }
 
@@ -78,6 +95,10 @@ class _ProjectListPageState extends State<ProjectListPage>
       setState(() {
         allProjects = result['projects'] as List<ProjectListItemModel>;
         canAddProject = result['canAddProject'] as bool;
+        // FIX: read the dedicated edit-permission flag the backend now sends
+        // (admin OR the named exception user). Defaults to false if an older
+        // backend build doesn't send it yet.
+        canEditProject = result['canEditProject'] as bool? ?? false;
         isLoading = false;
       });
     } catch (e) {
@@ -598,7 +619,10 @@ class _ProjectListPageState extends State<ProjectListPage>
                           formattedDate: _formatDate(item.createdAt),
                           statusLabel: _statusLabel(item),
                           statusColor: _statusColor(item),
-                          canEdit: canAddProject,
+                          // FIX: Edit visibility now comes straight from the
+                          // backend's `can_edit_project` flag (admin OR the
+                          // named exception user), not a local role check.
+                          canEdit: canEditProject,
                           isTeamLeader: isTeamLeader,
                           onViewProcesses: () => _openProcessList(item),
                           onNocMap: () => _openNocMap(item),
@@ -885,7 +909,7 @@ class _ProjectCard extends StatelessWidget {
                           color: const Color(0xFF6366F1),
                           onTap: onAssignMember,
                         ),
-                      // ── Edit (admin only) ────────────────────────────
+                      // ── Edit (admin OR the backend-granted exception) ──
                       if (canEdit)
                         _ActionBtn(
                           label: 'Edit',

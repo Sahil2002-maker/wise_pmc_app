@@ -576,6 +576,9 @@ static Future<void> logout() async {
         return {
           'projects': projects,
           'canAddProject': safeBody['can_add_project'] == true,
+          // NEW: forward the backend's dedicated edit-permission flag
+          // (admin OR the named exception user) to the UI layer.
+          'canEditProject': safeBody['can_edit_project'] == true,
         };
       }
       throw ApiException(

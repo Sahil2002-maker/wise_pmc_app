@@ -1,7 +1,27 @@
 // lib/features/development_process/data/services/development_process_api.dart
 //
+// FIX (Assign To list showing only Team Members, no Team Leader):
+//   fetchTeamMembersForProcess() was calling ApiConstants.teamMembers(teamId)
+//   → GET /api/mobile/teams/{teamId}/members
+//   That's the GENERIC team-members endpoint served by a different
+//   controller. It only returns plain members and has no `role` field, so
+//   Team Leaders never came through — even though the backend's dedicated
+//   MobileDevelopmentProcessController::getTeamMembers() logic (which DOES
+//   return both leaders and members, each tagged with role: 'Team Leader' /
+//   'Team Member') was already correct.
+//
+//   That correct endpoint is registered at:
+//   GET /api/mobile/development-process/team-members/{teamId}
+//   → ApiConstants.devProcessTeamMembers(teamId)
+//
+//   Fixed below: fetchTeamMembersForProcess() now calls
+//   ApiConstants.devProcessTeamMembers(teamId) instead of
+//   ApiConstants.teamMembers(teamId). No changes were needed in
+//   AssignProcessSheet — its leader/member split logic was already correct,
+//   it just never received leader data because of the wrong URL.
+//
 // FIX: getFileUrl() now logs the exact path sent and full server response so
-// the root cause of "No file is attached" can be diagnosed.  The method also
+// the root cause of "No file is attached" can be diagnosed. The method also
 // surfaces the real server error message instead of a generic one, and guards
 // against the path being an empty string after trimming.
 
@@ -237,18 +257,8 @@ class DevelopmentProcessApi {
   }
 
   // ── Get pre-signed file URL ───────────────────────────────────────────────────
-  //
-  // FIX: Added comprehensive logging so we can see:
-  //   1. Exactly which filePath is being sent to the server
-  //   2. The full raw server response (status + body)
-  //   3. Whether the server returned success=false with a message
-  //
-  // This surfaces the real failure reason (e.g. "File not found on S3",
-  // wrong path format, missing document_path column value) instead of the
-  // generic "No file is attached to this process." that was shown before.
 
   static Future<String> getFileUrl(String filePath) async {
-    // ── Guard: empty / whitespace-only path ──────────────────────────────────
     final cleanPath = filePath.trim();
     if (cleanPath.isEmpty) {
       developer.log(
@@ -260,7 +270,6 @@ class DevelopmentProcessApi {
           'Please upload a document first.');
     }
 
-    // Build the URL — send path under both parameter names the server accepts
     final uri = Uri.parse(ApiConstants.devProcessFileUrl).replace(
       queryParameters: {
         'file_path': cleanPath,
@@ -278,7 +287,6 @@ class DevelopmentProcessApi {
           .get(uri, headers: await _headers())
           .timeout(const Duration(seconds: 30));
 
-      // ── Log full raw response so we can diagnose server-side errors ──────────
       developer.log(
           '[DevelopmentProcessApi] getFileUrl ← HTTP ${response.statusCode}\n'
           '  body = ${response.body}',
@@ -287,7 +295,6 @@ class DevelopmentProcessApi {
       final decoded = _decode(response.body);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
-        // Happy path — server returned a signed URL
         final url = decoded is Map ? decoded['url']?.toString() : null;
         if (url != null && url.isNotEmpty) {
           developer.log(
@@ -296,7 +303,6 @@ class DevelopmentProcessApi {
           return url;
         }
 
-        // Server returned 200 but no URL — log what we got
         developer.log(
             '[DevelopmentProcessApi] getFileUrl ✗ server returned 200 but '
             'no "url" field in response.\n'
@@ -305,7 +311,6 @@ class DevelopmentProcessApi {
             '  Full decoded = $decoded',
             name: 'DevelopmentProcessApi');
 
-        // Surface any server-provided message (e.g. "File not found on S3")
         final serverMsg =
             decoded is Map ? decoded['message']?.toString() : null;
         throw ApiException(
@@ -316,12 +321,10 @@ class DevelopmentProcessApi {
         );
       }
 
-      // ── Non-2xx responses ────────────────────────────────────────────────────
       if (response.statusCode == 401) {
         throw ApiException('Session expired. Please login again.');
       }
       if (response.statusCode == 404) {
-        // Log the exact path that wasn't found so it can be investigated
         developer.log(
             '[DevelopmentProcessApi] getFileUrl 404 — file not found on S3.\n'
             '  Searched path: "$cleanPath"\n'
@@ -364,11 +367,25 @@ class DevelopmentProcessApi {
     }
   }
 
-  // ── Fetch team members ────────────────────────────────────────────────────────
+  // ── Fetch team members (leaders + members) for the Assign sheet ───────────────
 
   static Future<List<TeamMemberItem>> fetchTeamMembersForProcess(
       int teamId) async {
-    final url = ApiConstants.teamMembers(teamId);
+    // ── FIX ────────────────────────────────────────────────────────────────
+    // This USED to call ApiConstants.teamMembers(teamId), i.e.
+    //   GET /api/mobile/teams/{teamId}/members
+    // That is the GENERIC team-members endpoint, served by a different
+    // controller. It only returns plain team members with no `role` field,
+    // so Team Leaders never came through in the Assign To list — even
+    // though TeamMemberItem.isTeamLeader and the AssignProcessSheet's
+    // leader/member split were already implemented correctly.
+    //
+    // The endpoint that returns BOTH Team Leaders and Team Members (each
+    // tagged with role: 'Team Leader' / 'Team Member') is
+    // MobileDevelopmentProcessController::getTeamMembers(), registered at:
+    //   GET /api/mobile/development-process/team-members/{teamId}
+    // which is exactly ApiConstants.devProcessTeamMembers(teamId).
+    final url = ApiConstants.devProcessTeamMembers(teamId);
 
     developer.log(
         '[DevelopmentProcessApi] fetchTeamMembersForProcess → GET $url teamId=$teamId',
