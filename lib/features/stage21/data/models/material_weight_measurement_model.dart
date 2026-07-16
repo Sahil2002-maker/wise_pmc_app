@@ -1,9 +1,15 @@
 // lib/features/stage21/data/models/material_weight_measurement_model.dart
 //
-// UPDATED: Full cement + steel dual-type support.
-// Each entry now has an `entryType` field ('steel' | 'cement').
-// Steel entries: gross/tare weights + 3 photo slots.
-// Cement entries: ordered/received bag counts + 2 photo slots.
+// UPDATED: Full Steel + Cement + Other dual/triple-type support, matching
+// the web backend exactly.
+// Each entry now has an `entryType` field ('steel' | 'cement' | 'other').
+// Steel entries:  gross/tare weights (kg)               + 3 photo slots.
+// Cement entries: ordered/received bag counts            + 2 photo slots.
+// Other entries:  gross/tare weights (kg | brass | nos)  + 3 photo slots
+//                 — physically identical to Steel on the wire, plus a
+//                 `unit` field. This mirrors how the Laravel backend
+//                 stores "Other" entries under the same photo/weight keys
+//                 as Steel so show/edit/print/download logic stays unified.
 // Multi-photo arrays are used throughout (matching the web backend).
 
 import 'dart:io';
@@ -17,6 +23,7 @@ class MwmListModel {
   final int entryCount;
   final String totalNetWeight;
   final String? totalReceivedBags;
+  final String? totalOther;
   final String? remarks;
   final String? creatorName;
 
@@ -27,6 +34,7 @@ class MwmListModel {
     required this.entryCount,
     required this.totalNetWeight,
     this.totalReceivedBags,
+    this.totalOther,
     this.remarks,
     this.creatorName,
   });
@@ -44,6 +52,7 @@ class MwmListModel {
           : int.tryParse(json['entry_count'].toString()) ?? 0,
       totalNetWeight: json['total_net_weight']?.toString() ?? '0.000',
       totalReceivedBags: json['total_received_bags']?.toString(),
+      totalOther: json['total_other']?.toString(),
       remarks: json['remarks']?.toString(),
       creatorName: creator is Map ? creator['name']?.toString() : null,
     );
@@ -145,13 +154,23 @@ class MwmPhotoItem {
 
 // ─── Entry type enum ───────────────────────────────────────────────────────
 
-enum MwmEntryType { steel, cement }
+enum MwmEntryType { steel, cement, other }
+
+/// Units available for the "Other" material category.
+const List<String> kMwmOtherUnits = ['kg', 'brass', 'nos'];
 
 extension MwmEntryTypeX on MwmEntryType {
-  String get value => name; // 'steel' | 'cement'
-  static MwmEntryType from(String? s) =>
-      s == 'cement' ? MwmEntryType.cement : MwmEntryType.steel;
+  String get value => name; // 'steel' | 'cement' | 'other'
+
+  static MwmEntryType from(String? s) {
+    if (s == 'cement') return MwmEntryType.cement;
+    if (s == 'other') return MwmEntryType.other;
+    return MwmEntryType.steel;
+  }
 }
+
+String normalizeMwmUnit(String? unit) =>
+    kMwmOtherUnits.contains(unit) ? unit! : 'kg';
 
 // ─── Detail entry (view) ───────────────────────────────────────────────────
 
@@ -164,7 +183,8 @@ class MwmEntryModel {
   final int materialTypeId;
   final String materialTypeName;
 
-  // Steel-only
+  // Steel / Other (unit applies to Other only — steel is always 'kg')
+  final String unit;
   final double grossWeight;
   final String grossWeightFormatted;
   final List<MwmPhotoItem> grossWeightSlipPhotos;
@@ -188,6 +208,7 @@ class MwmEntryModel {
     required this.challanNumber,
     required this.materialTypeId,
     required this.materialTypeName,
+    this.unit = 'kg',
     this.grossWeight = 0,
     this.grossWeightFormatted = '0.000',
     this.grossWeightSlipPhotos = const [],
@@ -206,6 +227,7 @@ class MwmEntryModel {
 
   bool get isCement => entryType == MwmEntryType.cement;
   bool get isSteel => entryType == MwmEntryType.steel;
+  bool get isOther => entryType == MwmEntryType.other;
 
   factory MwmEntryModel.fromJson(Map<String, dynamic> json) {
     final type = MwmEntryTypeX.from(json['entry_type']?.toString());
@@ -228,12 +250,13 @@ class MwmEntryModel {
       );
     }
 
-    // Steel
+    // Steel OR Other — same physical keys, differ only by `unit`.
     final gross = _parseDouble(json['gross_weight']);
     final tare  = _parseDouble(json['tare_weight']);
     final net   = _parseDouble(json['net_material_weight']);
     return MwmEntryModel(
       entryType: type,
+      unit: type == MwmEntryType.other ? normalizeMwmUnit(json['unit']?.toString()) : 'kg',
       vehicleNumber: json['vehicle_number']?.toString() ?? '',
       challanNumber: json['challan_number']?.toString() ?? '',
       materialTypeId: _parseInt(json['material_type_id']),
@@ -301,7 +324,8 @@ class MwmEditEntry {
   final String challanNumber;
   final int materialTypeId;
 
-  // Steel
+  // Steel / Other
+  final String unit;
   final double grossWeight;
   final List<MwmPhotoItem> grossWeightSlipPhotos;
   final List<MwmPhotoItem> vehicleWithMaterialImagePhotos;
@@ -319,6 +343,7 @@ class MwmEditEntry {
     required this.vehicleNumber,
     required this.challanNumber,
     required this.materialTypeId,
+    this.unit = 'kg',
     this.grossWeight = 0,
     this.grossWeightSlipPhotos = const [],
     this.vehicleWithMaterialImagePhotos = const [],
@@ -349,6 +374,7 @@ class MwmEditEntry {
 
     return MwmEditEntry(
       entryType: type,
+      unit: type == MwmEntryType.other ? normalizeMwmUnit(json['unit']?.toString()) : 'kg',
       vehicleNumber: json['vehicle_number']?.toString() ?? '',
       challanNumber: json['challan_number']?.toString() ?? '',
       materialTypeId: _parseInt(json['material_type_id']),
@@ -469,7 +495,8 @@ class MwmEntryForm {
   String challanNumber;
   MwmMaterialTypeModel? materialType;
 
-  // Steel
+  // Steel / Other (unit only meaningful for Other)
+  String unit;
   double grossWeight;
   double tareWeight;
   MwmFileSlot grossWeightSlip;
@@ -489,6 +516,7 @@ class MwmEntryForm {
     this.vehicleNumber = '',
     this.challanNumber = '',
     this.materialType,
+    this.unit = 'kg',
     this.grossWeight = 0.0,
     this.tareWeight = 0.0,
     MwmFileSlot? grossWeightSlip,
@@ -528,7 +556,8 @@ class MwmEntryForm {
       );
     }
     return MwmEntryForm(
-      entryType: MwmEntryType.steel,
+      entryType: e.entryType, // steel or other
+      unit: e.unit,
       vehicleNumber: e.vehicleNumber,
       challanNumber: e.challanNumber,
       materialType: matchedType,
@@ -544,6 +573,7 @@ class MwmEntryForm {
 
   bool get isCement => entryType == MwmEntryType.cement;
   bool get isSteel => entryType == MwmEntryType.steel;
+  bool get isOther => entryType == MwmEntryType.other;
 
   double get netWeight {
     final n = grossWeight - tareWeight;
@@ -561,6 +591,7 @@ class MwmEntryForm {
     String? challanNumber,
     MwmMaterialTypeModel? materialType,
     bool clearMaterialType = false,
+    String? unit,
     double? grossWeight,
     double? tareWeight,
     MwmFileSlot? grossWeightSlip,
@@ -577,6 +608,7 @@ class MwmEntryForm {
         challanNumber: challanNumber ?? this.challanNumber,
         materialType:
             clearMaterialType ? null : (materialType ?? this.materialType),
+        unit: unit ?? this.unit,
         grossWeight: grossWeight ?? this.grossWeight,
         tareWeight: tareWeight ?? this.tareWeight,
         grossWeightSlip: grossWeightSlip ?? this.grossWeightSlip,

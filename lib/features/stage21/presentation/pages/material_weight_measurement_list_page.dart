@@ -1,6 +1,10 @@
 // lib/features/stage21/presentation/pages/material_weight_measurement_list_page.dart
 //
-// Updated: shows total_received_bags for cement-type records in the card header.
+// Updated: card now shows Total Received Bags AND Other (Net) as separate,
+// always-visible columns (matching the web table), instead of swapping
+// "Received Bags" with "Created By". Created By and Remarks are now shown
+// as their own row underneath, same as the web's CREATED BY / REMARKS
+// columns.
 
 import 'package:flutter/material.dart';
 import '../controllers/material_weight_measurement_controller.dart';
@@ -370,9 +374,20 @@ class _MaterialWeightMeasurementListPageState
 
   Widget _buildCard(MwmListModel record, int index) {
     final isDownloading = _downloadingId == record.id;
+
     final hasBags = record.totalReceivedBags != null &&
+        record.totalReceivedBags!.trim().isNotEmpty &&
         record.totalReceivedBags != '0' &&
-        record.totalReceivedBags!.isNotEmpty;
+        record.totalReceivedBags != '0.000';
+
+    final hasOther = record.totalOther != null &&
+        record.totalOther!.trim().isNotEmpty &&
+        record.totalOther != '0' &&
+        record.totalOther != '0.000' &&
+        record.totalOther != '{}' &&
+        record.totalOther != 'null';
+
+    final hasRemarks = record.remarks != null && record.remarks!.isNotEmpty;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
@@ -445,21 +460,35 @@ class _MaterialWeightMeasurementListPageState
           child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+            // Row 1: Entries + Total Net Wt.
             Row(children: [
               _infoItem(Icons.format_list_numbered_outlined, 'Entries',
                   '${record.entryCount}'),
               const SizedBox(width: 12),
               _infoItem(Icons.scale_outlined, 'Total Net Wt.',
                   '${record.totalNetWeight} kg'),
-              const SizedBox(width: 12),
-              if (hasBags)
-                _infoItem(Icons.inventory_2_outlined, 'Received Bags',
-                    record.totalReceivedBags!)
-              else
-                _infoItem(Icons.person_outline, 'Created By',
-                    record.creatorName ?? 'N/A'),
             ]),
-            if (!hasBags && record.remarks != null && record.remarks!.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            // Row 2: Total Received Bags + Other (Net) — always visible,
+            // matching the web table's dedicated columns.
+            Row(children: [
+              _infoItem(
+                  Icons.inventory_2_outlined,
+                  'Received Bags',
+                  hasBags ? record.totalReceivedBags! : '—'),
+              const SizedBox(width: 12),
+              _infoItem(
+                  Icons.category_outlined,
+                  'Other (Net)',
+                  hasOther ? record.totalOther! : '—'),
+            ]),
+            const SizedBox(height: 10),
+            // Row 3: Created By
+            Row(children: [
+              _infoItem(Icons.person_outline, 'Created By',
+                  record.creatorName ?? 'N/A'),
+            ]),
+            if (hasRemarks) ...[
               const SizedBox(height: 8),
               Row(children: [
                 const Icon(Icons.notes_outlined,

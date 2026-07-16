@@ -1,7 +1,10 @@
 // lib/features/stage21/data/services/mwm_api_service.dart
 //
-// UPDATED: Cement + Steel dual-type support.
+// UPDATED: Steel + Cement + Other triple-type support.
 // Multi-photo arrays sent as files[i][field][] and captured[i][field][].
+// "Other" entries post under other_unit / other_gross_weight /
+// other_tare_weight and other_loaded_slip / other_vehicle_image /
+// other_empty_slip — matching the Laravel mobile controller.
 
 import 'dart:convert';
 import 'dart:developer' as developer;
@@ -150,7 +153,25 @@ class MwmApiService {
       fields.addAll(_entryFields(i, entry));
       fields['existing_index[$i]'] = entry.originalIndex?.toString() ?? 'new';
 
-      if (entry.isSteel) {
+      if (entry.isCement) {
+        if (entry.orderedBagReceiptImage.removed) {
+          fields['removed_photos[$i][ordered_bag_receipt_image][]'] = '';
+        }
+        if (entry.receivedBagImage.removed) {
+          fields['removed_photos[$i][received_bag_image][]'] = '';
+        }
+      } else if (entry.isOther) {
+        if (entry.grossWeightSlip.removed) {
+          fields['removed_photos[$i][other_loaded_slip][]'] = '';
+        }
+        if (entry.vehicleWithMaterialImage.removed) {
+          fields['removed_photos[$i][other_vehicle_image][]'] = '';
+        }
+        if (entry.tareWeightSlip.removed) {
+          fields['removed_photos[$i][other_empty_slip][]'] = '';
+        }
+      } else {
+        // steel
         if (entry.grossWeightSlip.removed) {
           fields['removed_photos[$i][gross_weight_slip][]'] = '';
         }
@@ -159,13 +180,6 @@ class MwmApiService {
         }
         if (entry.tareWeightSlip.removed) {
           fields['removed_photos[$i][tare_weight_slip][]'] = '';
-        }
-      } else {
-        if (entry.orderedBagReceiptImage.removed) {
-          fields['removed_photos[$i][ordered_bag_receipt_image][]'] = '';
-        }
-        if (entry.receivedBagImage.removed) {
-          fields['removed_photos[$i][received_bag_image][]'] = '';
         }
       }
     }
@@ -215,27 +229,31 @@ class MwmApiService {
       'entries[$i][material_type_id]': e.materialType?.id.toString() ?? '',
     };
 
-    if (e.isSteel) {
+    void addGeo(String slot, MwmFileSlot slot_) {
+      if (slot_.geo != null) {
+        fields['geo[$i][$slot][]'] = jsonEncode(slot_.geo!.toJson());
+      }
+    }
+
+    if (e.isCement) {
+      fields['entries[$i][total_ordered_bags]'] = e.totalOrderedBags.toString();
+      fields['entries[$i][total_received_bags]'] = e.totalReceivedBags.toString();
+      addGeo('ordered_bag_receipt_image', e.orderedBagReceiptImage);
+      addGeo('received_bag_image', e.receivedBagImage);
+    } else if (e.isOther) {
+      fields['entries[$i][other_unit]'] = e.unit;
+      fields['entries[$i][other_gross_weight]'] = e.grossWeight.toString();
+      fields['entries[$i][other_tare_weight]'] = e.tareWeight.toString();
+      addGeo('other_loaded_slip', e.grossWeightSlip);
+      addGeo('other_vehicle_image', e.vehicleWithMaterialImage);
+      addGeo('other_empty_slip', e.tareWeightSlip);
+    } else {
+      // steel
       fields['entries[$i][gross_weight]'] = e.grossWeight.toString();
       fields['entries[$i][tare_weight]'] = e.tareWeight.toString();
-      void addGeo(String slot, MwmFileSlot slot_) {
-        if (slot_.geo != null) {
-          fields['geo[$i][$slot][]'] = jsonEncode(slot_.geo!.toJson());
-        }
-      }
       addGeo('gross_weight_slip', e.grossWeightSlip);
       addGeo('vehicle_with_material_image', e.vehicleWithMaterialImage);
       addGeo('tare_weight_slip', e.tareWeightSlip);
-    } else {
-      fields['entries[$i][total_ordered_bags]'] = e.totalOrderedBags.toString();
-      fields['entries[$i][total_received_bags]'] = e.totalReceivedBags.toString();
-      void addGeo(String slot, MwmFileSlot slot_) {
-        if (slot_.geo != null) {
-          fields['geo[$i][$slot][]'] = jsonEncode(slot_.geo!.toJson());
-        }
-      }
-      addGeo('ordered_bag_receipt_image', e.orderedBagReceiptImage);
-      addGeo('received_bag_image', e.receivedBagImage);
     }
 
     return fields;
@@ -255,13 +273,17 @@ class MwmApiService {
       );
     }
 
-    if (e.isSteel) {
+    if (e.isCement) {
+      await addFile('ordered_bag_receipt_image', e.orderedBagReceiptImage);
+      await addFile('received_bag_image', e.receivedBagImage);
+    } else if (e.isOther) {
+      await addFile('other_loaded_slip', e.grossWeightSlip);
+      await addFile('other_vehicle_image', e.vehicleWithMaterialImage);
+      await addFile('other_empty_slip', e.tareWeightSlip);
+    } else {
       await addFile('gross_weight_slip', e.grossWeightSlip);
       await addFile('vehicle_with_material_image', e.vehicleWithMaterialImage);
       await addFile('tare_weight_slip', e.tareWeightSlip);
-    } else {
-      await addFile('ordered_bag_receipt_image', e.orderedBagReceiptImage);
-      await addFile('received_bag_image', e.receivedBagImage);
     }
   }
 

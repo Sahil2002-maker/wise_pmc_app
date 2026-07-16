@@ -1,8 +1,10 @@
 // lib/features/stage21/presentation/pages/material_weight_measurement_view_page.dart
 //
-// UPDATED: Full cement + steel dual-type view support.
-// Steel entries: weights + 3 photo slots.
+// UPDATED: Full Steel + Cement + Other triple-type view support.
+// Steel entries:  weights (kg) + 3 photo slots.
 // Cement entries: bag counts + 2 photo slots.
+// Other entries:  weights (kg | brass | nos) + 3 photo slots — same layout
+//                 as Steel with a unit-aware badge/metrics.
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -15,6 +17,7 @@ class MaterialWeightMeasurementViewPage extends StatelessWidget {
 
   static const Color _accent = Color(0xFF059669);
   static const Color _cementAccent = Color(0xFFD97706);
+  static const Color _otherAccent = Color(0xFF7E57C2);
 
   @override
   Widget build(BuildContext context) {
@@ -116,7 +119,8 @@ class MaterialWeightMeasurementViewPage extends StatelessWidget {
   Widget _buildEntryBlock(
       BuildContext ctx, int index, MwmEntryModel entry) {
     final isCement = entry.isCement;
-    final accent = isCement ? _cementAccent : _accent;
+    final isOther = entry.isOther;
+    final accent = isCement ? _cementAccent : (isOther ? _otherAccent : _accent);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -161,7 +165,7 @@ class MaterialWeightMeasurementViewPage extends StatelessWidget {
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
-                isCement ? 'Cement' : 'Steel',
+                isCement ? 'Cement' : (isOther ? 'Other (${entry.unit})' : 'Steel'),
                 style: TextStyle(
                     fontSize: 9,
                     fontWeight: FontWeight.w700,
@@ -198,13 +202,13 @@ class MaterialWeightMeasurementViewPage extends StatelessWidget {
             else
               Row(children: [
                 _metricCard('Loaded Wt.',
-                    '${entry.grossWeightFormatted} kg', false, _accent),
+                    '${entry.grossWeightFormatted} ${entry.unit}', false, accent),
                 const SizedBox(width: 8),
                 _metricCard('Empty Wt.',
-                    '${entry.tareWeightFormatted} kg', false, _accent),
+                    '${entry.tareWeightFormatted} ${entry.unit}', false, accent),
                 const SizedBox(width: 8),
                 _metricCard('Net Material Wt.',
-                    '${entry.netWeightFormatted} kg', true, _accent),
+                    '${entry.netWeightFormatted} ${entry.unit}', true, accent),
               ]),
             const SizedBox(height: 14),
 

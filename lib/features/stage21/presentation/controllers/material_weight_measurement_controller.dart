@@ -6,8 +6,11 @@ import 'package:geolocator/geolocator.dart';
 import '../../data/models/material_weight_measurement_model.dart';
 import '../../data/services/mwm_api_service.dart';
 
+/// File slot keys are shared between Steel and Other (identical wire shape);
+/// only the API field names they get posted under differ, which the API
+/// service handles based on entry type.
 enum MwmFileSlotKey {
-  // Steel
+  // Steel / Other
   grossWeightSlip,
   vehicleWithMaterialImage,
   tareWeightSlip,
@@ -169,7 +172,10 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
   // ── Entry management ───────────────────────────────────────────────────────
 
   void addEntry({MwmEntryType type = MwmEntryType.steel}) {
-    formEntries = [...formEntries, MwmEntryForm(entryType: type)];
+    formEntries = [
+      ...formEntries,
+      MwmEntryForm(entryType: type, unit: type == MwmEntryType.other ? 'kg' : 'kg'),
+    ];
     notifyListeners();
   }
 
@@ -424,6 +430,15 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
       .where((e) => e.isCement)
       .fold(0, (s, e) => s + e.totalReceivedBags);
 
+  /// Groups "Other" entries' net weight by unit, e.g. {'brass': 2.5, 'nos': 12}.
+  Map<String, double> get formTotalOtherByUnit {
+    final map = <String, double>{};
+    for (final e in formEntries.where((e) => e.isOther)) {
+      map[e.unit] = (map[e.unit] ?? 0) + e.netWeight;
+    }
+    return map;
+  }
+
   // ── Validation ─────────────────────────────────────────────────────────────
 
   bool _validateEntries() {
@@ -438,6 +453,12 @@ class MaterialWeightMeasurementController extends ChangeNotifier {
       if (e.isSteel && (e.grossWeight <= 0 || e.tareWeight <= 0)) {
         formError =
             'Please enter valid Loaded and Empty weights for steel entries.';
+        notifyListeners();
+        return false;
+      }
+      if (e.isOther && (e.grossWeight <= 0 || e.tareWeight <= 0)) {
+        formError =
+            'Please enter valid Loaded and Empty weights for "Other" entries.';
         notifyListeners();
         return false;
       }

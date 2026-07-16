@@ -1,9 +1,13 @@
 // lib/features/stage21/presentation/pages/material_weight_measurement_form_page.dart
 //
-// Supports Steel + Cement entry types.
-// Steel: gross weight, tare weight, 3 photo slots, auto net calc.
+// Supports Steel + Cement + Other entry types (matching the web app).
+// Steel:  gross weight, tare weight (kg), 3 photo slots, auto net calc.
 // Cement: ordered bags, received bags, 2 photo slots, auto remaining calc.
-// Entry type is selectable via a radio toggle (locked for existing entries).
+// Other:  gross weight, tare weight (kg | brass | nos via unit selector),
+//         3 photo slots, auto net calc — same layout as Steel plus a unit
+//         dropdown.
+// Entry type is selectable via a toggle (locked for existing entries, same
+// as web — category can't be changed once an entry has been saved).
 
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -32,7 +36,6 @@ class MaterialWeightMeasurementFormPage extends StatefulWidget {
 class _MaterialWeightMeasurementFormPageState
     extends State<MaterialWeightMeasurementFormPage> {
   static const Color _accent = Color(0xFF059669);
-  static const Color _cementAccent = Color(0xFFD97706); // amber for cement
 
   final _remarksCtrl = TextEditingController();
   final ImagePicker _picker = ImagePicker();
@@ -256,6 +259,15 @@ class _MaterialWeightMeasurementFormPageState
                         Text('Add Cement Entry'),
                       ]),
                     ),
+                    const PopupMenuItem(
+                      value: MwmEntryType.other,
+                      child: Row(children: [
+                        Icon(Icons.category_outlined,
+                            color: Color(0xFF7E57C2), size: 16),
+                        SizedBox(width: 8),
+                        Text('Add Other Entry'),
+                      ]),
+                    ),
                   ],
                   child: Container(
                     padding: const EdgeInsets.symmetric(
@@ -388,10 +400,11 @@ class _MaterialWeightMeasurementFormPageState
       AnimatedBuilder(
         animation: ctrl,
         builder: (_, __) {
-          final hasCement =
-              ctrl.formEntries.any((e) => e.isCement);
-          final hasSteel =
-              ctrl.formEntries.any((e) => e.isSteel);
+          final hasCement = ctrl.formEntries.any((e) => e.isCement);
+          final hasSteel = ctrl.formEntries.any((e) => e.isSteel);
+          final otherTotals = ctrl.formTotalOtherByUnit;
+          final hasOther = otherTotals.isNotEmpty;
+
           return Column(children: [
             if (hasSteel)
               Container(
@@ -427,7 +440,7 @@ class _MaterialWeightMeasurementFormPageState
                   ],
                 ),
               ),
-            if (hasSteel && hasCement) const SizedBox(height: 8),
+            if (hasSteel && (hasCement || hasOther)) const SizedBox(height: 8),
             if (hasCement)
               Container(
                 padding: const EdgeInsets.all(14),
@@ -461,6 +474,38 @@ class _MaterialWeightMeasurementFormPageState
                     ),
                   ],
                 ),
+              ),
+            if (hasCement && hasOther) const SizedBox(height: 8),
+            if (hasOther)
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEDE7F6),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: const Color(0xFF7E57C2).withValues(alpha: 0.4)),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('Total Net Weight (Other)',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF5E35B1))),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 14,
+                    runSpacing: 4,
+                    children: otherTotals.entries
+                        .map((e) => Text(
+                              '${e.key == 'nos' ? e.value.toStringAsFixed(0) : e.value.toStringAsFixed(3)} ${e.key}',
+                              style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF5E35B1)),
+                            ))
+                        .toList(),
+                  ),
+                ]),
               ),
           ]);
         },
@@ -536,7 +581,7 @@ class _MaterialWeightMeasurementFormPageState
 
 // ═══════════════════════════════════════════════════════════════════════════
 // _EntryCard — isolated StatefulWidget per entry row.
-// Handles both Steel and Cement types.
+// Handles Steel, Cement, and Other types.
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _EntryCard extends StatefulWidget {
@@ -562,10 +607,11 @@ class _EntryCard extends StatefulWidget {
 class _EntryCardState extends State<_EntryCard> {
   static const Color _steelAccent = Color(0xFF059669);
   static const Color _cementAccent = Color(0xFFD97706);
+  static const Color _otherAccent = Color(0xFF7E57C2);
 
   late final TextEditingController _vehicleCtrl;
   late final TextEditingController _challanCtrl;
-  // Steel-specific
+  // Steel / Other
   late final TextEditingController _grossCtrl;
   late final TextEditingController _tareCtrl;
   // Cement-specific
@@ -574,8 +620,11 @@ class _EntryCardState extends State<_EntryCard> {
 
   bool _suppressListener = false;
 
-  Color get _accent =>
-      widget.entry.isCement ? _cementAccent : _steelAccent;
+  Color get _accent {
+    if (widget.entry.isCement) return _cementAccent;
+    if (widget.entry.isOther) return _otherAccent;
+    return _steelAccent;
+  }
 
   @override
   void initState() {
@@ -661,6 +710,7 @@ class _EntryCardState extends State<_EntryCard> {
     final entry = widget.entry;
     final isNew = entry.originalIndex == null;
     final isCement = entry.isCement;
+    final isOther = entry.isOther;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -711,13 +761,15 @@ class _EntryCardState extends State<_EntryCard> {
                 Icon(
                   isCement
                       ? Icons.inventory_2_outlined
-                      : Icons.layers_outlined,
+                      : isOther
+                          ? Icons.category_outlined
+                          : Icons.layers_outlined,
                   size: 10,
                   color: _accent,
                 ),
                 const SizedBox(width: 3),
                 Text(
-                  isCement ? 'Cement' : 'Steel',
+                  isCement ? 'Cement' : (isOther ? 'Other (${entry.unit})' : 'Steel'),
                   style: TextStyle(
                       fontSize: 9,
                       fontWeight: FontWeight.w700,
@@ -771,18 +823,17 @@ class _EntryCardState extends State<_EntryCard> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF16A34A).withValues(alpha: 0.1),
+                  color: _accent.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                      color: const Color(0xFF16A34A)
-                          .withValues(alpha: 0.3)),
+                      color: _accent.withValues(alpha: 0.3)),
                 ),
                 child: Text(
-                  'Net: ${entry.netWeight.toStringAsFixed(3)} kg',
-                  style: const TextStyle(
+                  'Net: ${entry.netWeight.toStringAsFixed(3)} ${entry.unit}',
+                  style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFF16A34A)),
+                      color: _accent),
                 ),
               ),
             const SizedBox(width: 6),
@@ -825,18 +876,24 @@ class _EntryCardState extends State<_EntryCard> {
             _buildMaterialTypeField(ctrl, widget.index, entry),
             const SizedBox(height: 10),
 
+            // ── Unit selector (Other only) ─────────────────────────────────
+            if (isOther) ...[
+              _buildUnitSelector(ctrl, entry),
+              const SizedBox(height: 10),
+            ],
+
             // ── Type-specific fields ──────────────────────────────────────
             if (isCement)
               _buildCementFields(ctrl, entry)
             else
-              _buildSteelFields(ctrl, entry),
+              _buildWeightFields(ctrl, entry),
           ]),
         ),
       ]),
     );
   }
 
-  // ── Type toggle ───────────────────────────────────────────────────────────
+  // ── Type toggle (Steel / Cement / Other) ──────────────────────────────────
 
   Widget _buildTypeToggle(
       MaterialWeightMeasurementController ctrl, MwmEntryForm entry) {
@@ -846,19 +903,24 @@ class _EntryCardState extends State<_EntryCard> {
         color: const Color(0xFFF1F5F9),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Row(children: [
-        const Text('Material Category:',
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF374151))),
-        const SizedBox(width: 12),
-        _typeRadio(ctrl, entry, MwmEntryType.steel, 'Steel',
-            Icons.layers_outlined, const Color(0xFF1D4ED8)),
-        const SizedBox(width: 16),
-        _typeRadio(ctrl, entry, MwmEntryType.cement, 'Cement',
-            Icons.inventory_2_outlined, const Color(0xFFD97706)),
-      ]),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 8,
+        children: [
+          const Text('Material Category:',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF374151))),
+          _typeRadio(ctrl, entry, MwmEntryType.steel, 'Steel',
+              Icons.layers_outlined, const Color(0xFF1D4ED8)),
+          _typeRadio(ctrl, entry, MwmEntryType.cement, 'Cement',
+              Icons.inventory_2_outlined, const Color(0xFFD97706)),
+          _typeRadio(ctrl, entry, MwmEntryType.other, 'Other',
+              Icons.category_outlined, _otherAccent),
+        ],
+      ),
     );
   }
 
@@ -910,16 +972,65 @@ class _EntryCardState extends State<_EntryCard> {
     );
   }
 
-  // ── Steel fields ──────────────────────────────────────────────────────────
+  // ── Unit selector (Other) ─────────────────────────────────────────────────
 
-  Widget _buildSteelFields(
+  Widget _buildUnitSelector(
+      MaterialWeightMeasurementController ctrl, MwmEntryForm entry) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('Unit *',
+          style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF374151))),
+      const SizedBox(height: 4),
+      Wrap(
+        spacing: 8,
+        children: kMwmOtherUnits.map((u) {
+          final selected = entry.unit == u;
+          return GestureDetector(
+            onTap: () {
+              if (ctrl.formError != null) ctrl.clearFormError();
+              ctrl.updateEntry(widget.index, entry.copyWith(unit: u));
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: selected
+                    ? _otherAccent.withValues(alpha: 0.12)
+                    : Colors.white,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: selected
+                      ? _otherAccent.withValues(alpha: 0.6)
+                      : const Color(0xFFCBD5E1),
+                  width: selected ? 1.5 : 1.0,
+                ),
+              ),
+              child: Text(u,
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight:
+                          selected ? FontWeight.w700 : FontWeight.w500,
+                      color: selected ? _otherAccent : const Color(0xFF64748B))),
+            ),
+          );
+        }).toList(),
+      ),
+    ]);
+  }
+
+  // ── Weight fields (shared by Steel + Other) ────────────────────────────────
+
+  Widget _buildWeightFields(
       MaterialWeightMeasurementController ctrl, MwmEntryForm entry) {
     final net = entry.netWeight;
+    final unit = entry.unit;
+    final accent = entry.isOther ? _otherAccent : _steelAccent;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Row: Loaded Weight + slip photo + vehicle photo
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(child: _formField(
-          label: 'Loaded Weight (kg) *',
+          label: 'Loaded Weight ($unit) *',
           controller: _grossCtrl,
           hint: '0.000',
           isNumber: true,
@@ -932,7 +1043,7 @@ class _EntryCardState extends State<_EntryCard> {
           slotKey: MwmFileSlotKey.grossWeightSlip,
           slot: entry.grossWeightSlip,
           label: 'Loaded Weight Slip',
-          accentColor: _steelAccent,
+          accentColor: accent,
         )),
         const SizedBox(width: 8),
         Expanded(child: _buildFileSlot(
@@ -941,14 +1052,14 @@ class _EntryCardState extends State<_EntryCard> {
           slotKey: MwmFileSlotKey.vehicleWithMaterialImage,
           slot: entry.vehicleWithMaterialImage,
           label: 'Vehicle Photo',
-          accentColor: _steelAccent,
+          accentColor: accent,
         )),
       ]),
       const SizedBox(height: 10),
       // Row: Empty Weight + slip photo
       Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(child: _formField(
-          label: 'Empty Weight (kg) *',
+          label: 'Empty Weight ($unit) *',
           controller: _tareCtrl,
           hint: '0.000',
           isNumber: true,
@@ -961,7 +1072,7 @@ class _EntryCardState extends State<_EntryCard> {
           slotKey: MwmFileSlotKey.tareWeightSlip,
           slot: entry.tareWeightSlip,
           label: 'Empty Weight Slip',
-          accentColor: _steelAccent,
+          accentColor: accent,
         )),
         const Expanded(child: SizedBox()),
       ]),
@@ -970,10 +1081,9 @@ class _EntryCardState extends State<_EntryCard> {
       Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: const Color(0xFFF0FDF4),
+          color: accent.withValues(alpha: 0.06),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-              color: const Color(0xFF16A34A).withValues(alpha: 0.4)),
+          border: Border.all(color: accent.withValues(alpha: 0.4)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -981,7 +1091,7 @@ class _EntryCardState extends State<_EntryCard> {
             _calcItem(
                 label: 'Loaded Wt.',
                 value:
-                    '${(double.tryParse(_grossCtrl.text) ?? 0.0).toStringAsFixed(3)} kg'),
+                    '${(double.tryParse(_grossCtrl.text) ?? 0.0).toStringAsFixed(3)} $unit'),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 8),
               child: Text('−',
@@ -991,7 +1101,7 @@ class _EntryCardState extends State<_EntryCard> {
             _calcItem(
                 label: 'Empty Wt.',
                 value:
-                    '${(double.tryParse(_tareCtrl.text) ?? 0.0).toStringAsFixed(3)} kg'),
+                    '${(double.tryParse(_tareCtrl.text) ?? 0.0).toStringAsFixed(3)} $unit'),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 8),
               child: Text('=',
@@ -1000,9 +1110,9 @@ class _EntryCardState extends State<_EntryCard> {
             ),
             _calcItem(
               label: 'Net Material Wt.',
-              value: '${net.toStringAsFixed(3)} kg',
+              value: '${net.toStringAsFixed(3)} $unit',
               isHighlight: true,
-              highlightColor: const Color(0xFF16A34A),
+              highlightColor: accent,
             ),
           ],
         ),
